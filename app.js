@@ -482,9 +482,10 @@
         html += '<div class="grid"><div class="card"><h3>По дням</h3>' + byDayTable(rows, 'day', v2) + '</div><div class="card"><h3>По регионам и менеджерам</h3>' + byZoneMgr(rows, v2) + '</div></div>';
         html += '<div class="card"><h3>Крупнейшие плательщики</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Сумма</th><th>Платежей</th></tr></thead><tbody>' +
           top.map(function (k) { return '<tr><td class="l">' + esc(k) + '</td><td class="l">' + esc(C[k].m) + '</td><td>' + rub(C[k].s) + '</td><td>' + C[k].n + '</td></tr>'; }).join('') + '</tbody></table></div>' +
-          '<div class="note">Как в боте: входящие платежи + касса по всем юрлицам, менеджер — по «Менеджеру ОП» или владельцу документа. Для плана/факта отдела (раздел «Выполнение») считается по методике Десанта — цифры могут немного отличаться.</div></div>';
+          '<div class="note">Методика Десанта, как в «Выполнении»: входящие платежи + касса ООО «АМИНАТРЕЙД», без РВБ, Нике/Евростандарт и «Интернет Решений»; менеджер — «Менеджер ОП», регион — по владельцу клиента.</div></div>';
       } else {
         var names = { today: 'Оплаты на сегодня', week: 'Оплаты на неделю', month: 'Остаток месяца', in_days: 'Поступило вчера и сегодня', in_month: 'Поступило за месяц' };
+        html += '<div class="card note" style="margin-top:0">Это сообщения бота как есть. Бот считает по своей методике (все юрлица, регион — по менеджеру), поэтому его цифры могут немного отличаться от вкладок «План поступлений» и «Поступления», которые считаются как в Десанте.' + (j.botUpdated ? ' Бот обновлял ' + esc(j.botUpdated.slice(8, 10) + '.' + j.botUpdated.slice(5, 7) + ' ' + j.botUpdated.slice(11, 16)) + '.' : '') + '</div>';
         html += '<div class="grid">' + ['today', 'week', 'month', 'in_days', 'in_month'].map(function (k) { return j.texts[k] ? '<div class="card"><div class="small muted" style="margin-bottom:6px">' + names[k] + '</div><div style="white-space:pre-wrap;overflow-wrap:anywhere">' + tgHtml(j.texts[k]) + '</div></div>' : ''; }).join('') + '</div>';
       }
       w.innerHTML = html;
