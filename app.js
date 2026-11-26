@@ -84,6 +84,11 @@
     if (p === '/api/grading') return Promise.resolve(D.grading);
     if (p === '/api/plans') return Promise.resolve(D.plans);
     if (p === '/api/money') return D.moneyBlob ? blobJson(D.moneyBlob) : Promise.resolve({ none: true });
+    var one = { '/api/forecast': 'forecastBlob', '/api/debts': 'debtsBlob', '/api/sleeping': 'sleepingBlob' }[p];
+    if (one) return D[one] ? blobJson(D[one]) : Promise.resolve({ none: true });
+    if (p === '/api/managers') return Promise.resolve(D.managers || []);
+    if (p === '/api/manager') { var mb = (D.managerBlobs || {})[q(url, 'm')]; return mb ? blobJson(mb) : Promise.resolve({ error: 'Нет данных' }); }
+    if (p === '/api/products') { var pb = D.productsBlobs || {}, pm = q(url, 'ym'); if (!pb[pm]) pm = D.productsLast; return pb[pm] ? blobJson(pb[pm]) : Promise.resolve({ none: true }); }
     if (p === '/api/grading/plan') { var n = D.gradPlans[q(url, 'date')]; return n ? blobJson(n) : Promise.reject(new Error('Нет списка')); }
     if (p === '/api/fileinfo') { var fi = D.files[q(url, 'f')]; return fi ? Promise.resolve(fi) : Promise.reject(new Error('Файл не найден')); }
     if (p === '/api/fact') {
@@ -126,7 +131,8 @@
   }
 
   // ---------- меню ----------
-  var ROUTES = [['home', 'Главная'], ['prices', 'Прайсы и конкуренты'], ['clients', 'Клиентская база'], ['plans', 'Планы продаж'], ['fact', 'Выполнение планов'], ['money', 'Деньги'], ['training', 'Обучение']];
+  var ROUTES = [['home', 'Главная'], ['maneuver', 'Манёвр'], ['fact', 'Выполнение'], ['money', 'Деньги'], ['debts', 'Дебиторка'], ['managers', 'Менеджеры'], ['clients', 'Клиентская база'], ['sleeping', 'Засыпающие'],
+    ['plans', 'Планы'], ['prices', 'Прайсы и конкуренты'], ['training', 'Обучение']];
   function drawNav(cur) {
     navEl.innerHTML = ROUTES.map(function (r) {
       return '<a href="#' + r[0] + '" class="' + (r[0] === cur ? 'on' : '') + '">' + esc(r[1]) + (r[0] === 'home' && pendingCount ? '<span class="badge">' + pendingCount + '</span>' : '') + '</a>';
@@ -146,6 +152,7 @@
     window.scrollTo(0, 0);
     main.innerHTML = '<div class="loading">Загрузка…</div>';
     if (r === 'view') return viewFile(decodeURIComponent(parts[1] || ''));
+    if (r === 'mgr') { drawNav('managers'); return managerPage(decodeURIComponent(parts[1] || '')); }
     if (r === 'home') return home();
     return section(r);
   }
@@ -225,7 +232,17 @@
           '<div class="tile"><div class="k">Факт отдела</div><div class="v">' + u(f.reg['Отдел']) + '</div><div class="s">' + (f.isCur ? 'прошло ' + f.wdDone + ' из ' + f.wdAll + ' раб. дней' : 'месяц закрыт') + '</div></div>' +
           vk.map(function (k) { var pl = f.plans[k]['Отдел'], r = f.reg['Отдел'] / pl; return '<div class="tile"><div class="k">' + esc(k === 'plan' ? 'План' : k === 'plan1' ? 'План 1 (+5%)' : 'План 2 (+10%)') + ': ' + u(pl) + '</div><div class="v">' + pct(r) + '</div><div class="s">' + statusOf(f.isCur ? r / pace : r, !f.isCur) + '</div></div>'; }).join('') +
           ['Ц', 'Ю', 'С'].map(function (z) { var pl = vk.length ? f.plans[vk[0]][z] : null; return '<div class="tile"><div class="k">' + ZN[z] + '</div><div class="v">' + u(f.reg[z]) + '</div><div class="s">' + (pl ? pct(f.reg[z] / pl) + ' плана' + (vk.length > 1 ? ' 1' : '') : '') + '</div></div>'; }).join('') +
-          '</div>' + factStatusLine(f.status) + '</div>';
+          '</div>';
+        var ex = h.extra || {};
+        if (ex.forecast || ex.products) {
+          var fp = ex.forecast, pp = ex.products;
+          html += '<div class="tiles" style="margin-top:12px">' +
+            (fp ? '<a class="tile" href="#maneuver" style="color:inherit"><div class="k">Прогноз месяца по датам оплаты</div><div class="v">' + num(fp.byDates / 1e6) + ' ю</div><div class="s">' + (fp.plan ? pct(fp.byDates / fp.plan) + ' плана · ' : '') + 'по прошлым мес. ' + num((fp.bySeason || 0) / 1e6) + ' ю →</div></a>' : '') +
+            (fp && fp.plan ? '<a class="tile" href="#maneuver" style="color:inherit"><div class="k">' + (fp.plan > fp.byDates ? 'Не хватает до плана' : 'Запас над планом') + '</div><div class="v ' + (fp.plan > fp.byDates ? 'neg' : 'pos') + '">' + num(Math.abs(fp.plan - fp.byDates) / 1e6) + ' ю</div><div class="s">осталось ' + fp.remIncl + ' раб. дн. · долги клиентов ' + num(fp.debt / 1e6) + ' ю</div></a>' : '') +
+            (pp ? '<a class="tile" href="#fact" style="color:inherit"><div class="k">Своё производство в отгрузках</div><div class="v">' + pct(pp.own / pp.all) + '</div><div class="s">горшки и кассеты ' + num(pp.own / 1e6) + ' млн · сопутка ' + num(pp.sop / 1e6) + ' млн</div></a>' : '') +
+            '</div>';
+        }
+        html += factStatusLine(f.status) + '</div>';
       }
       var acts = h.actions;
       html += '<div class="card"><h2>Ждут подтверждения</h2><div id="acts">' + (acts.length ? acts.map(actionHtml).join('') : '<div class="muted">Сейчас ничего не ждёт подтверждения. Когда скрипт подготовит правку в МойСклад, она появится здесь и в Telegram.</div>') + '</div></div>';
@@ -260,6 +277,10 @@
       if (s.widget === 'plans') plansWidget(w);
       if (s.widget === 'grading') gradingWidget(w);
       if (s.widget === 'money') moneyWidget(w);
+      if (s.widget === 'forecast') forecastWidget(w);
+      if (s.widget === 'debts') debtsWidget(w);
+      if (s.widget === 'managers') managersWidget(w);
+      if (s.widget === 'sleeping') sleepingWidget(w);
     }).catch(fail);
   }
 
@@ -293,6 +314,7 @@
             '<td>' + num(ly) + '</td><td class="' + (ly && fa >= ly ? 'pos' : 'neg') + '">' + (ly ? (fa >= ly ? '+' : '') + Math.round((fa / ly - 1) * 100) + '%' : '—') + '</td></tr>';
         }).join('') + '</tbody></table></div><div class="note">ю = млн ₽, приход денег (банк + касса), ООО «АМИНАТРЕЙД», без РВБ, Нике/Евростандарт и «Интернет Решений». Регион — по текущему владельцу клиента, как в «Отчёте Десант».' + (f.isCur && vk.length ? ' «Нужно в день» — по ' + (vk.length > 1 ? 'плану 1' : 'плану') + ' на оставшиеся рабочие дни.' : '') + '</div></div>';
       // график
+      html += '<div id="prodblock"></div>';
       html += '<div class="card"><h3>Отдел: накопительно по дням</h3><div id="chart"></div></div>';
       // менеджеры
       var zones = ['Ц', 'Ю', 'С', 'Б'];
@@ -315,6 +337,7 @@
       html += '<div class="card"><h3>Приход по месяцам</h3><div class="tw"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Без рег.</th><th>Отдел</th></tr></thead><tbody>' +
         f.byMonth.slice().reverse().map(function (m) { return '<tr><td>' + cap(ymName(m.ym)) + '</td><td>' + num(m['Ц']) + '</td><td>' + num(m['Ю']) + '</td><td>' + num(m['С']) + '</td><td>' + num(m['Б']) + '</td><td><b>' + num(m['Отдел']) + '</b></td></tr>'; }).join('') + '</tbody></table></div></div>';
       w.innerHTML = html;
+      productsBlock(document.getElementById('prodblock'), f.ym);
       document.getElementById('ym').addEventListener('change', function () { factWidget(w, this.value); });
       bindRefresh(w);
       // данные графика
@@ -478,6 +501,238 @@
         var n = 0, t = setInterval(function () { api('/api/money').then(function (j) { n++; if (!j.running || n > 40) { clearInterval(t); moneyWidget(w); } }); }, 5000);
       }).catch(function (e) { b.textContent = 'Ошибка: ' + e.message; });
     });
+  }
+
+  // ---------- общие кусочки для новых разделов ----------
+  function mln(x, d) { return x == null || !isFinite(x) ? '—' : num(x / 1e6, d == null ? 1 : d); }
+  function mgrLink(n) { return '<a href="#mgr/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'; }
+  function isMgr(n) { return ['Пронткилевич', 'Станевская', 'Удальцова', 'Дворин', 'Кузьмич', 'Гоголюк', 'Филимонова', 'Прохорович', 'Шандроха'].indexOf(n) >= 0; }
+  function mName(n) { return isMgr(n) ? mgrLink(n) : esc(n) + ' <span class="small muted">не в ОП</span>'; }
+  function details(title, inner, open) { return '<details class="card"' + (open ? ' open' : '') + '><summary style="cursor:pointer;font-weight:650">' + title + '</summary><div style="margin-top:10px">' + inner + '</div></details>'; }
+  function updLine(st, label) { if (!st || !st.updated) return ''; return esc(label) + ' ' + st.updated.slice(8, 10) + '.' + st.updated.slice(5, 7) + ' ' + st.updated.slice(11, 16); }
+  // товарные группы: сначала своё производство (главное), потом под заказ и сопутка
+  function groupBars(tot, cls, own) {
+    tot = tot || {};
+    var all = 0, ownSum = 0, k; for (k in tot) if (k !== 'service' && k !== 'other') all += tot[k];
+    own.forEach(function (c) { ownSum += tot[c] || 0; });
+    var max = 0; own.concat(['order', 'sop']).forEach(function (c) { if ((tot[c] || 0) > max) max = tot[c]; });
+    var row = function (c, strong, muted) {
+      var v = tot[c] || 0;
+      return '<tr' + (muted ? ' class="muted"' : '') + '><td class="l">' + (strong ? '<b>' : '') + esc(cls[c]) + (strong ? '</b>' : '') + '</td><td class="l" style="width:40%"><div class="bar" style="margin:0;height:8px"><i style="width:' + (max ? v / max * 100 : 0).toFixed(1) + '%;' + (muted ? 'background:var(--plan)' : '') + '"></i></div></td><td>' + mln(v, 1) + '</td><td>' + pct(all ? v / all : 0) + '</td></tr>';
+    };
+    return '<div class="tw"><table class="t"><thead><tr><th class="l">Группа</th><th></th><th>млн ₽</th><th>Доля</th></tr></thead><tbody>' +
+      '<tr class="grp"><td colspan="2">Своё производство — горшки и кассеты</td><td>' + mln(ownSum, 1) + '</td><td>' + pct(all ? ownSum / all : 0) + '</td></tr>' +
+      own.map(function (c) { return row(c, false, false); }).join('') +
+      '<tr class="grp"><td colspan="4">Прочее</td></tr>' + row('order', false, true) + row('sop', false, true) +
+      '</tbody></table></div>';
+  }
+  function ownShare(tot, own) { var a = 0, o = 0, k; tot = tot || {}; for (k in tot) if (k !== 'service' && k !== 'other') a += tot[k]; own.forEach(function (c) { o += tot[c] || 0; }); return { own: o, all: a, share: a ? o / a : 0, sop: tot.sop || 0 }; }
+  function orderTable(rows, cols) {
+    if (!rows.length) return '<div class="muted">Нет.</div>';
+    return '<div class="tw" style="max-height:60vh"><table class="t"><thead><tr><th>Дата оплаты</th><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>' + (cols || 'Ожидается') + '</th></tr></thead><tbody>' +
+      rows.map(function (r) { return '<tr><td>' + dayLabel(r.date) + '</td><td class="l">' + esc(r.client || '—') + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.exp) + '</b></td></tr>'; }).join('') + '</tbody></table></div>';
+  }
+
+  // товарные группы в «Выполнении»: месяц, к прошлому году, по менеджерам, динамика доли своего производства
+  function productsBlock(box, ym) {
+    if (!box) return;
+    api('/api/products?ym=' + ym).then(function (p) {
+      if (p.none || p.ym !== ym) { box.innerHTML = ''; return; }
+      var cur = ownShare(p.cur.tot, p.own), ly = p.ly ? ownShare(p.ly.tot, p.own) : null;
+      var mg = Object.keys(p.cur.byMgr).filter(isMgr).map(function (k) { var s = ownShare(p.cur.byMgr[k], p.own); s.name = k; return s; }).sort(function (a, b) { return b.own - a.own; });
+      var maxT = 0; p.trend.forEach(function (t) { if (t.own + t.sop + t.order > maxT) maxT = t.own + t.sop + t.order; });
+      box.innerHTML = '<div class="grid"><div class="card"><h3>Отгрузки: своё производство — главное</h3><div class="tiles" style="margin-bottom:12px">' +
+        '<div class="tile"><div class="k">Горшки и кассеты</div><div class="v">' + mln(cur.own) + '</div><div class="s">' + pct(cur.share) + ' отгрузок' + (ly ? ' · год назад ' + mln(ly.own) + (ly.own ? ' (' + (cur.own >= ly.own ? '+' : '') + Math.round((cur.own / ly.own - 1) * 100) + '%)' : '') : '') + '</div></div>' +
+        '<div class="tile"><div class="k">Сопутка</div><div class="v" style="color:var(--text-2)">' + mln(cur.sop) + '</div><div class="s">' + pct(cur.all ? cur.sop / cur.all : 0) + (ly ? ' · год назад ' + mln(ly.sop) : '') + '</div></div></div>' +
+        groupBars(p.cur.tot, p.cls, p.own) + '<div class="note">Отгрузки клиентам ОП РФ (все юрлица), млн ₽. ' + (p.ym === p.months[p.months.length - 1] ? 'Месяц ещё идёт.' : '') + '</div></div>' +
+        '<div class="card"><h3>Своё производство по менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Своё, млн</th><th>Доля своего</th><th>Сопутка, млн</th></tr></thead><tbody>' +
+        mg.map(function (s) { return '<tr><td>' + mgrLink(s.name) + '</td><td><b>' + mln(s.own, 2) + '</b></td><td class="' + (s.share < 0.7 ? 'neg' : '') + '">' + pct(s.share) + '</td><td class="muted">' + mln(s.sop, 2) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+        '<h3 style="margin-top:14px">13 месяцев</h3><div class="tw"><table class="t"><tbody>' + p.trend.slice().reverse().map(function (t) {
+          var tot = t.own + t.sop + t.order;
+          return '<tr><td>' + cap(ymName(t.ym)) + '</td><td class="l" style="width:45%"><div class="bar" style="margin:0;height:10px;display:flex;overflow:hidden"><i style="position:static;width:' + (maxT ? t.own / maxT * 100 : 0).toFixed(1) + '%"></i><i style="position:static;border-radius:0;background:var(--plan);width:' + (maxT ? (t.sop + t.order) / maxT * 100 : 0).toFixed(1) + '%"></i></div></td><td>' + mln(t.own) + '</td><td>' + pct(tot ? t.own / tot : 0) + '</td></tr>';
+        }).join('') + '</tbody></table></div><div class="note">Синее — своё производство, серое — сопутка и под заказ. Колонки: своё, млн ₽ и его доля.</div></div></div>';
+    }).catch(function () { box.innerHTML = ''; });
+  }
+
+  // ---------- «Манёвр»: прогноз месяца ----------
+  function forecastWidget(w) {
+    w.innerHTML = '<div class="loading">Считаю прогноз…</div>';
+    api('/api/forecast').then(function (f) {
+      if (f.none) { w.innerHTML = '<div class="card">' + esc(f.msg || 'Данных пока нет — идёт первая выгрузка из мс.') + '</div>'; return; }
+      var vk = f.variants, k0 = vk[0], dept = f.regions[3];
+      var vn = function (k) { return k === 'plan' ? 'План' : k === 'plan1' ? 'План 1' : 'План 2'; };
+      var pl = function (r, k) { var x = r.plans.filter(function (p) { return p.k === k; })[0]; return x ? x.plan : null; };
+      var chip = function (r) { var p = pl(r, k0); if (!p) return ''; var x = r.byDates / p; return x >= 1 ? '<span class="st good">дотягиваем</span>' : x >= 0.9 ? '<span class="st warn">на грани</span>' : '<span class="st bad">недобор</span>'; };
+      var p0 = pl(dept, k0), gap = p0 != null ? p0 - dept.byDates : null;
+      var t = f.today;
+      var html = '<div class="card"><h3>' + cap(ymName(f.ym)) + ': куда приходим</h3><div class="note" style="margin-top:0">Сегодня ' + t.slice(8, 10) + '.' + t.slice(5, 7) + ' · до конца месяца ' + f.remIncl + ' раб. дн. (включая сегодня) из ' + f.wdAll + '</div>' +
+        '<div class="tiles" style="margin-top:12px">' +
+        '<div class="tile"><div class="k">Факт отдела</div><div class="v">' + mln(dept.fact) + ' ю</div><div class="s">' + (p0 ? pct(dept.fact / p0) + ' плана' : '') + '</div></div>' +
+        '<div class="tile"><div class="k">Прогноз по датам оплаты</div><div class="v">' + mln(dept.byDates) + ' ю</div><div class="s">' + (p0 ? pct(dept.byDates / p0) + ' плана ' : '') + chip(dept) + '</div></div>' +
+        '<div class="tile"><div class="k">Прогноз по прошлым месяцам</div><div class="v">' + mln(dept.bySeason) + ' ю</div><div class="s">' + (p0 && dept.bySeason ? pct(dept.bySeason / p0) + ' плана' : '') + '</div></div>' +
+        (gap != null ? '<div class="tile"><div class="k">' + (gap > 0 ? 'Не хватает до плана' : 'Запас над планом') + '</div><div class="v ' + (gap > 0 ? 'neg' : 'pos') + '">' + mln(Math.abs(gap)) + ' ю</div><div class="s">' + (gap > 0 && f.remIncl ? 'нужно ' + mln(gap / f.remIncl, 1) + ' ю в день сверх ожидаемого' : 'по датам оплаты') + '</div></div>' : '') +
+        '<div class="tile"><div class="k">Резерв: долги клиентов</div><div class="v">' + mln(dept.debt) + ' ю</div><div class="s">отгружено, не оплачено</div></div>' +
+        '</div>' + (vk.length > 1 ? '<div class="note">Недобор и проценты — к плану 1 (' + mln(pl(dept, 'plan1')) + ' ю); план 2 — ' + mln(pl(dept, 'plan2')) + ' ю.</div>' : '') +
+        '<div class="note">' + [updLine(f.status.fact, 'Факт из мс:'), updLine(f.status.crm, 'заказы:')].filter(Boolean).join(' · ') + '</div></div>';
+      // регионы
+      html += '<div class="card"><h3>Регионы</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th>' + vk.map(function (k) { return '<th>' + vn(k) + '</th>'; }).join('') + '<th>Факт</th><th>+ ожидается</th><th>= прогноз</th><th>% плана</th><th>По прошлым мес.</th><th>По темпу</th><th>Не хватает</th><th>Долги</th></tr></thead><tbody>' +
+        f.regions.map(function (r) {
+          var p = pl(r, k0), g = p != null ? p - r.byDates : null;
+          return '<tr class="' + (r.z === 'Отдел' ? 'tot' : '') + '"><td>' + esc(r.name) + '</td>' + vk.map(function (k) { return '<td>' + mln(pl(r, k)) + '</td>'; }).join('') + '<td>' + mln(r.fact) + '</td><td>' + mln(r.exp) + '</td><td><b>' + mln(r.byDates) + '</b></td><td>' + (p ? pct(r.byDates / p) + ' ' + chip(r) : '—') + '</td><td>' + mln(r.bySeason) + '</td><td>' + mln(r.byRate) + '</td><td class="' + (g > 0 ? 'neg' : 'pos') + '">' + (g == null ? '—' : (g > 0 ? mln(g) : '+' + mln(-g))) + '</td><td>' + mln(r.debt) + '</td></tr>';
+        }).join('') + '</tbody></table></div>' +
+        '<div class="note"><b>Прогноз по датам оплаты</b> = факт + заказы с «Датой оплаты» до конца месяца (не больше неоплаченного остатка заказа). <b>По прошлым месяцам</b> — сколько обычно приходит в оставшиеся дни (медиана за 12 месяцев). <b>По темпу</b> — нынешний темп в день × все рабочие дни. Если «по прошлым месяцам» заметно выше «по датам» — у менеджеров не проставлены даты оплаты, деньги придут «без предупреждения» или их надо дожимать. Всё в ю (млн ₽), методика Десанта.</div></div>';
+      // кто может закрыть разрыв
+      html += '<div class="card"><h3>Где взять недостающее: резерв по менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Факт</th><th>Ожидается до конца мес.</th><th>Обещали, не пришло</th><th>Оплаты 1–15 след. мес.</th><th>Долги</th></tr></thead><tbody>' +
+        ['Ц', 'Ю', 'С'].map(function (z) {
+          var ms = f.mgrs.filter(function (m) { return m.zone === z; }); if (!ms.length) return '';
+          return '<tr class="grp"><td colspan="6">' + ZN[z] + '</td></tr>' + ms.map(function (m) {
+            return '<tr><td>' + mgrLink(m.name) + (m.top ? ' <span class="small muted">топ</span>' : '') + '</td><td>' + mln(m.fact, 2) + '</td><td>' + mln(m.exp, 2) + (m.expN ? ' <span class="small muted">(' + m.expN + ')</span>' : '') + '</td><td>' + (m.late ? '<span class="neg">' + mln(m.late, 2) + '</span>' : '—') + '</td><td>' + (m.nextEarly ? mln(m.nextEarly, 2) : '—') + '</td><td>' + (m.debt ? mln(m.debt, 2) : '—') + '</td></tr>';
+          }).join('');
+        }).join('') + '</tbody></table></div><div class="note">«Оплаты 1–15 след. месяца» — заказы, которые можно попробовать перенести в этот месяц. «Долги» — отгружено, но не оплачено (подробно — раздел «Дебиторка»). млн ₽.</div></div>';
+      // товарные группы месяца
+      var os = ownShare(f.products.tot, f.products.own);
+      html += '<div class="grid"><div class="card"><h3>Что отгружаем в ' + MONTHS[+f.ym.slice(5) - 1].replace(/ь$/, 'е').replace(/й$/, 'е').replace(/т$/, 'те') + '</h3>' + groupBars(f.products.tot, f.products.cls, f.products.own) +
+        '<div class="note">Отгрузки клиентам ОП РФ по всем юрлицам, млн ₽. Своё производство — ' + pct(os.share) + ' отгрузок.</div></div>' +
+        '<div class="card"><h3>Своё производство по регионам</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th><th>Своё, млн</th><th>Доля своего</th><th>Сопутка, млн</th></tr></thead><tbody>' +
+        ['Ц', 'Ю', 'С'].map(function (z) { var s = ownShare(f.products.byZone[z], f.products.own); return '<tr><td>' + ZN[z] + '</td><td>' + mln(s.own, 1) + '</td><td>' + pct(s.share) + '</td><td class="muted">' + mln(s.sop, 1) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+        (f.next && f.next.plans ? '<h3 style="margin-top:16px">' + cap(ymName(f.next.ym)) + ' — задел</h3><div class="note" style="margin-top:0">План: ' + Object.keys(f.next.plans).map(function (k) { return vn(k) + ' ' + num(f.next.plans[k]['Отдел']) + ' ю'; }).join(' · ') + '. Уже стоят даты оплаты на <b>' + mln(f.next.exp) + ' ю</b>.</div>' : '') + '</div></div>';
+      // списки
+      html += details('Ожидаемые оплаты до конца месяца · ' + f.expList.length + ' · ' + mln(f.expList.reduce(function (s, r) { return s + r.exp; }, 0)) + ' ю', orderTable(f.expList), false);
+      if (f.lateList.length) html += details('<span class="neg">Обещали в этом месяце, но не пришло · ' + f.lateList.length + '</span>', orderTable(f.lateList, 'Не пришло'), true);
+      if (f.nextList.length) html += details('Можно ускорить: оплаты 1–15 ' + MONTHS_GEN[+f.next.ym.slice(5) - 1] + ' · ' + f.nextList.length, orderTable(f.nextList), false);
+      if (f.noSum.length) html += details('<span class="neg">⚠️ Дата оплаты есть, «Сумма оплаты» не заполнена · ' + f.noSum.length + '</span>', orderTable(f.noSum, 'Остаток'), false);
+      w.innerHTML = html;
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+
+  // ---------- «Дебиторка» ----------
+  var debtState = { mgr: '', q: '' };
+  function debtsWidget(w) {
+    w.innerHTML = '<div class="loading">Считаю долги…</div>';
+    api('/api/debts').then(function (d) {
+      if (d.none || d.total == null) { w.innerHTML = '<div class="card">Данных пока нет — идёт первая выгрузка заказов из мс.</div>'; return; }
+      var old30 = d.totalB[2] + d.totalB[3] + d.totalB[4];
+      var html = '<div class="card"><div class="tiles">' +
+        '<div class="tile"><div class="k">Отгружено, не оплачено</div><div class="v">' + rub(d.total) + '</div><div class="s">' + d.n + ' заказ(ов)</div></div>' +
+        '<div class="tile"><div class="k">Старше 30 дней</div><div class="v ' + (old30 ? 'neg' : '') + '">' + rub(old30) + '</div><div class="s">' + pct(d.total ? old30 / d.total : 0) + '</div></div>' +
+        '<div class="tile"><div class="k">Старше 90 дней</div><div class="v ' + (d.totalB[4] ? 'neg' : '') + '">' + rub(d.totalB[4]) + '</div><div class="s">проверить: долг или не привязана оплата</div></div>' +
+        '<div class="tile"><div class="k">Прошла «Дата оплаты»</div><div class="v">' + rub(d.overdue) + '</div></div>' +
+        '<div class="tile"><div class="k">Авансы: оплачено, не отгружено</div><div class="v">' + rub(d.prepay) + '</div><div class="s">' + d.prepayN + ' заказ(ов) — в очередь на отгрузку</div></div>' +
+        '</div><div class="note">Долг по заказу = отгружено − оплачено (по данным заказа в мс). Давность — от последней отгрузки по заказу. ООО «АМИНАТРЕЙД», менеджер — «Менеджер ОП», регион — по владельцу клиента. ' + updLine(d.status, 'Данные мс на') + '</div></div>';
+      html += '<div class="card"><h3>По давности</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th>' + d.buckets.map(function (b) { return '<th>' + b + '</th>'; }).join('') + '<th>Итого</th></tr></thead><tbody>' +
+        d.byZone.map(function (z) { return '<tr><td>' + esc(z.name) + '</td>' + z.b.map(function (v, i) { return '<td class="' + (i >= 2 && v ? 'neg' : '') + '">' + (v ? mln(v, 2) : '—') + '</td>'; }).join('') + '<td><b>' + mln(z.total, 2) + '</b></td></tr>'; }).join('') +
+        '<tr class="tot"><td>Всего</td>' + d.totalB.map(function (v) { return '<td>' + mln(v, 2) + '</td>'; }).join('') + '<td>' + mln(d.total, 2) + '</td></tr></tbody></table></div><div class="note">млн ₽</div></div>';
+      html += '<div class="card"><h3>По менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th>' + d.buckets.map(function (b) { return '<th>' + b + '</th>'; }).join('') + '<th>Итого</th><th>Заказов</th></tr></thead><tbody>' +
+        d.byMgr.map(function (m) { return '<tr><td>' + mName(m.name) + '</td>' + m.b.map(function (v, i) { return '<td class="' + (i >= 2 && v ? 'neg' : '') + '">' + (v ? mln(v, 2) : '—') + '</td>'; }).join('') + '<td><b>' + mln(m.total, 2) + '</b></td><td>' + m.n + '</td></tr>'; }).join('') +
+        '</tbody></table></div><div class="note">«не в ОП» — заказы, где в «Менеджере ОП» указан сотрудник не из текущего состава отдела (бывшие менеджеры, стажёр, РОП). Их долги никто не ведёт — стоит переназначить.</div></div>';
+      html += '<div class="card"><h3>Крупнейшие должники</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Долг</th><th>Заказов</th><th>Самый старый, дн.</th></tr></thead><tbody>' +
+        d.clients.slice(0, 30).map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td class="l">' + esc(c.mgr) + '</td><td><b>' + rub(c.total) + '</b></td><td>' + c.n + '</td><td class="' + (c.maxAge > 30 ? 'neg' : '') + '">' + c.maxAge + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+      var mgrs = []; d.rows.forEach(function (r) { if (mgrs.indexOf(r.mgr) < 0) mgrs.push(r.mgr); }); mgrs.sort();
+      html += '<div class="card"><h3>Заказы с долгом</h3><div class="row" style="margin-bottom:10px"><select id="dm"><option value="">Все менеджеры</option>' + mgrs.map(function (m) { return '<option' + (m === debtState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select><input type="search" id="dq" placeholder="Клиент или № заказа" value="' + esc(debtState.q) + '" style="flex:1;min-width:0"></div><div id="dl"></div></div>';
+      w.innerHTML = html;
+      var dl = w.querySelector('#dl');
+      function draw() {
+        var q = debtState.q.toLowerCase(), rs = d.rows.filter(function (r) { return (!debtState.mgr || r.mgr === debtState.mgr) && (!q || (r.client + ' ' + r.num).toLowerCase().indexOf(q) >= 0); });
+        dl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' заказ(ов) · ' + rub(rs.reduce(function (s, r) { return s + r.debt; }, 0)) + '</div><div class="tw" style="max-height:65vh"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Долг</th><th>Отгружено</th><th>Последняя отгрузка</th><th>Дней</th><th>Дата оплаты</th></tr></thead><tbody>' +
+          rs.slice(0, 300).map(function (r) { return '<tr><td class="l">' + esc(r.client) + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.debt) + '</b></td><td>' + rub(r.shipped) + '</td><td>' + dayLabel(r.shipDate) + '</td><td class="' + (r.age > 30 ? 'neg' : '') + '">' + r.age + '</td><td>' + (r.payDate ? dayLabel(r.payDate) + (r.overdue ? ' <span class="neg">+' + r.overdue + ' дн.</span>' : '') : '—') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      }
+      w.querySelector('#dm').addEventListener('change', function () { debtState.mgr = this.value; draw(); });
+      w.querySelector('#dq').addEventListener('input', function () { debtState.q = this.value; draw(); });
+      draw();
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+
+  // ---------- «Менеджеры»: список и карточка ----------
+  function managersWidget(w) {
+    w.innerHTML = '<div class="loading">Загружаю…</div>';
+    Promise.all([api('/api/managers'), api('/api/forecast'), api('/api/debts'), api('/api/sleeping')]).then(function (x) {
+      var list = x[0], f = x[1], d = x[2], s = x[3];
+      var fm = {}; (f.mgrs || []).forEach(function (m) { fm[m.name] = m; });
+      var dm = {}; (d.byMgr || []).forEach(function (m) { dm[m.name] = m; });
+      var sm = {}; (s.byMgr || []).forEach(function (m) { sm[m.name] = m; });
+      w.innerHTML = '<div class="grid">' + ['Центр', 'Юг', 'Север'].map(function (z) {
+        return list.filter(function (m) { return m.zone === z; }).map(function (m) {
+          var a = fm[m.name] || {}, b = dm[m.name] || {}, c = sm[m.name] || {};
+          return '<a class="card" href="#mgr/' + encodeURIComponent(m.name) + '" style="display:block;color:inherit">' +
+            '<div class="row" style="justify-content:space-between"><b>' + esc(m.name) + '</b><span class="small muted">' + esc(z) + (m.top ? ' · топ' : '') + '</span></div>' +
+            '<div class="tiles" style="margin-top:10px;grid-template-columns:repeat(2,1fr)">' +
+            '<div class="tile"><div class="k">Факт месяца</div><div class="v" style="font-size:19px">' + mln(a.fact, 2) + '</div></div>' +
+            '<div class="tile"><div class="k">Ожидается</div><div class="v" style="font-size:19px">' + mln(a.exp, 2) + '</div></div>' +
+            '<div class="tile"><div class="k">Долги</div><div class="v" style="font-size:19px">' + mln(b.total, 2) + '</div></div>' +
+            '<div class="tile"><div class="k">Засыпают / без задач</div><div class="v" style="font-size:19px">' + ((c.s1 || 0) + (c.s2 || 0)) + ' / <span class="' + (c.noTask ? 'neg' : '') + '">' + (c.noTask || 0) + '</span></div></div>' +
+            '</div><div class="note">млн ₽ · открыть карточку →</div></a>';
+        }).join('');
+      }).join('') + '</div>';
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+  function managerPage(name) {
+    main.innerHTML = '<div class="loading">Собираю карточку…</div>';
+    api('/api/manager?m=' + encodeURIComponent(name)).then(function (m) {
+      if (m.error) { main.innerHTML = '<div class="card">' + esc(m.error) + '</div>'; return; }
+      var os = ownShare(m.products.cur, m.products.own), o12 = ownShare(m.products.y12, m.products.own);
+      var html = '<div class="viewer-head"><a class="btn" href="#managers">← Менеджеры</a><span class="nm" style="font-size:18px">' + esc(m.name) + ' <span class="small muted">' + esc(m.zone) + (m.top ? ' · топ' : '') + '</span></span></div>';
+      html += '<div class="card"><div class="tiles">' +
+        '<div class="tile"><div class="k">Факт ' + MONTHS[+m.ym.slice(5) - 1] + '</div><div class="v">' + mln(m.fact, 2) + '</div><div class="s">' + pct(m.share) + ' региона' + (m.ly != null ? ' · год назад ' + mln(m.ly, 2) : '') + '</div></div>' +
+        '<div class="tile"><div class="k">Ожидается до конца месяца</div><div class="v">' + mln(m.forecast ? m.forecast.exp : 0, 2) + '</div><div class="s">' + (m.forecast && m.forecast.late ? '<span class="neg">не пришло ' + mln(m.forecast.late, 2) + '</span>' : 'по датам оплаты') + '</div></div>' +
+        '<div class="tile"><div class="k">Долги клиентов</div><div class="v">' + mln(m.debts ? m.debts.total : 0, 2) + '</div><div class="s">' + (m.debts ? 'старше 30 дн.: ' + mln(m.debts.b[2] + m.debts.b[3] + m.debts.b[4], 2) : '') + '</div></div>' +
+        '<div class="tile"><div class="k">Задачи в мс</div><div class="v">' + m.tasks.open + '</div><div class="s ' + (m.tasks.overdue ? 'neg' : '') + '">просрочено ' + m.tasks.overdue + '</div></div>' +
+        (m.base ? '<div class="tile"><div class="k">Клиентов на ' + m.base.date.slice(8, 10) + '.' + m.base.date.slice(5, 7) + '</div><div class="v">' + m.base.n + '</div><div class="s">активных ' + pct(m.base.a / m.base.n) + ' · VIP ' + m.base.vip + '</div></div>' : '') +
+        '<div class="tile"><div class="k">Своё производство в отгрузках</div><div class="v">' + pct(os.share) + '</div><div class="s">за 12 мес.: ' + pct(o12.share) + '</div></div>' +
+        '</div><div class="note">млн ₽. Факт — приход денег по «Менеджеру ОП» (Десант); отгрузки — клиентам, которыми он владеет.</div></div>';
+      var max = 0; m.trend.forEach(function (x) { if (x.fact > max) max = x.fact; });
+      html += '<div class="grid"><div class="card"><h3>Приход денег по месяцам</h3><div class="tw"><table class="t"><tbody>' + m.trend.slice().reverse().map(function (x) {
+        return '<tr><td>' + cap(ymName(x.ym)) + '</td><td class="l" style="width:50%"><div class="bar" style="margin:0;height:8px"><i style="width:' + (max ? x.fact / max * 100 : 0).toFixed(1) + '%"></i></div></td><td>' + mln(x.fact, 2) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' +
+        '<div class="card"><h3>Что отгружает: 12 месяцев</h3>' + groupBars(m.products.y12, m.products.cls, m.products.own) + '<h3 style="margin-top:14px">Этот месяц</h3>' + groupBars(m.products.cur, m.products.cls, m.products.own) + '</div></div>';
+      html += '<div class="card"><h3>Лучшие клиенты по своему производству (12 мес.)</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th>Своё, млн</th><th>Всего, млн</th><th>Последняя отгрузка</th></tr></thead><tbody>' +
+        m.topClients.map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td><b>' + mln(c.own12, 2) + '</b></td><td>' + mln(c.all12, 2) + '</td><td>' + dayLabel(c.last) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+      html += details('Ожидаемые оплаты до конца месяца · ' + m.expList.length, orderTable(m.expList), m.expList.length > 0 && m.expList.length < 15);
+      if (m.lateList.length) html += details('<span class="neg">Обещали, но не пришло · ' + m.lateList.length + '</span>', orderTable(m.lateList, 'Не пришло'), true);
+      if (m.nextList.length) html += details('Оплаты 1–15 следующего месяца · ' + m.nextList.length, orderTable(m.nextList), false);
+      html += details('Долги по заказам · ' + m.debtRows.length, m.debtRows.length ? '<div class="tw" style="max-height:60vh"><table class="t"><thead><tr><th class="l">Клиент</th><th>Заказ</th><th>Долг</th><th>Дней с отгрузки</th></tr></thead><tbody>' +
+        m.debtRows.map(function (r) { return '<tr><td class="l">' + esc(r.client) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.debt) + '</b></td><td class="' + (r.age > 30 ? 'neg' : '') + '">' + r.age + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="muted">Нет.</div>', false);
+      html += details('<span class="' + (m.tasks.overdue ? 'neg' : '') + '">Просроченные задачи · ' + m.tasks.overdue + '</span>', m.tasks.list.length ? '<div class="tw" style="max-height:60vh"><table class="t"><thead><tr><th>Срок</th><th class="l">Клиент</th><th class="l">Задача</th></tr></thead><tbody>' +
+        m.tasks.list.map(function (t) { return '<tr><td>' + dayLabel(t.due) + '</td><td class="l">' + esc(t.client || '—') + '</td><td class="l small">' + esc(t.desc) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (m.tasks.overdue > m.tasks.list.length ? '<div class="note">Показаны 40 самых старых.</div>' : '') : '<div class="muted">Нет.</div>', false);
+      html += details('Засыпающие клиенты · ' + m.sleeping.length, sleepTable(m.sleeping, true), false);
+      main.innerHTML = html;
+    }).catch(fail);
+  }
+
+  // ---------- «Засыпающие клиенты» ----------
+  var sleepState = { mgr: '', st: 'all12', noTask: false };
+  function sleepTable(rows, noMgr) {
+    if (!rows.length) return '<div class="muted">Нет.</div>';
+    return '<div class="tw" style="max-height:70vh"><table class="t"><thead><tr><th class="l">Клиент</th>' + (noMgr ? '' : '<th class="l">Менеджер</th>') + '<th>Последняя отгрузка</th><th>Мес. тишины</th><th>Своё за 24 мес.</th><th>Сопутка</th><th>Задачи</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        return '<tr><td class="l">' + esc(r.client) + '<div class="small muted">' + esc(r.cstate || '') + (r.inn ? ' · ИНН ' + esc(r.inn) : '') + '</div></td>' + (noMgr ? '' : '<td class="l">' + mgrLink(r.mgr) + '</td>') +
+          '<td>' + dayLabel(r.last) + '</td><td>' + num(r.months, 1) + '</td><td><b>' + rub(r.own24) + '</b></td><td class="muted">' + rub(r.sop24) + '</td><td>' + (r.tasks ? r.tasks + (r.nextTask ? '<div class="small muted">до ' + dayLabel(r.nextTask) + '</div>' : '') : '<span class="st bad">нет задач</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+  function sleepingWidget(w) {
+    w.innerHTML = '<div class="loading">Ищу засыпающих…</div>';
+    api('/api/sleeping').then(function (s) {
+      if (s.none) { w.innerHTML = '<div class="card">Данных пока нет — идёт выгрузка отгрузок из мс.</div>'; return; }
+      var html = '<div class="card"><div class="note" style="margin-top:0">Клиенты ОП РФ, которые раньше покупали, а последняя отгрузка была 3+ месяца назад. Порядок — по объёму <b>своего производства (горшки и кассеты) за 24 месяца</b>: сверху те, кого страшнее всего потерять. «Нет задач» — по клиенту в мс нет ни одной открытой задачи, его никто не ведёт. Дублеры исключены. ' + updLine(s.status, 'Отгрузки из мс на') + '</div></div>';
+      html += '<div class="card"><h3>По менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Засыпает 3–6 мес.</th><th>Уснул 6–12 мес.</th><th>Своё производство под риском</th><th>Без задач</th><th>…их своё производство</th></tr></thead><tbody>' +
+        s.byMgr.map(function (m) { return '<tr><td>' + mgrLink(m.name) + '</td><td>' + m.s1 + '</td><td>' + m.s2 + '</td><td><b>' + mln(m.own, 1) + '</b></td><td class="' + (m.noTask ? 'neg' : '') + '">' + m.noTask + '</td><td>' + mln(m.noTaskOwn, 1) + '</td></tr>'; }).join('') +
+        '</tbody></table></div><div class="note">«Под риском» — что эти клиенты (3–12 мес. тишины) взяли горшков и кассет за последние 24 месяца, млн ₽.</div></div>';
+      var mgrs = s.byMgr.map(function (m) { return m.name; });
+      html += '<div class="card"><div class="row" style="margin-bottom:10px"><select id="sm"><option value="">Все менеджеры</option>' + mgrs.map(function (m) { return '<option' + (m === sleepState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select>' +
+        '<div class="seg" id="ss">' + [['all12', '3–12 мес.'], ['s1', 'Засыпает 3–6'], ['s2', 'Уснул 6–12'], ['s3', 'Отвалился > 12']].map(function (x) { return '<button type="button" data-s="' + x[0] + '" class="' + (sleepState.st === x[0] ? 'on' : '') + '">' + x[1] + '</button>'; }).join('') + '</div>' +
+        '<label class="small" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="snt"' + (sleepState.noTask ? ' checked' : '') + '> только без задач</label></div><div id="sl"></div></div>';
+      w.innerHTML = html;
+      var sl = w.querySelector('#sl');
+      function draw() {
+        var rs = s.rows.filter(function (r) {
+          var okS = sleepState.st === 'all12' ? r.months < 12 : sleepState.st === 's1' ? r.months < 6 : sleepState.st === 's2' ? (r.months >= 6 && r.months < 12) : r.months >= 12;
+          return okS && (!sleepState.mgr || r.mgr === sleepState.mgr) && (!sleepState.noTask || !r.tasks);
+        });
+        sl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' клиент(ов) · своё производство за 24 мес. ' + rub(rs.reduce(function (a, r) { return a + r.own24; }, 0)) + (rs.length > 300 ? ' · показаны первые 300' : '') + '</div>' + sleepTable(rs.slice(0, 300), false);
+      }
+      w.querySelector('#sm').addEventListener('change', function () { sleepState.mgr = this.value; draw(); });
+      w.querySelector('#snt').addEventListener('change', function () { sleepState.noTask = this.checked; draw(); });
+      w.querySelector('#ss').addEventListener('click', function (e) { var v = e.target.getAttribute('data-s'); if (!v) return; sleepState.st = v; var bs = this.querySelectorAll('button'); for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-s') === v ? 'on' : ''; draw(); });
+      draw();
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
   }
 
   // ---------- планы ----------
