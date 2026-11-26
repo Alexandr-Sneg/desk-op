@@ -83,6 +83,7 @@
     if (p === '/api/actions') return Promise.resolve(D.actions);
     if (p === '/api/grading') return Promise.resolve(D.grading);
     if (p === '/api/plans') return Promise.resolve(D.plans);
+    if (p === '/api/money') return D.moneyBlob ? blobJson(D.moneyBlob) : Promise.resolve({ none: true });
     if (p === '/api/grading/plan') { var n = D.gradPlans[q(url, 'date')]; return n ? blobJson(n) : Promise.reject(new Error('Нет списка')); }
     if (p === '/api/fileinfo') { var fi = D.files[q(url, 'f')]; return fi ? Promise.resolve(fi) : Promise.reject(new Error('Файл не найден')); }
     if (p === '/api/fact') {
@@ -125,7 +126,7 @@
   }
 
   // ---------- меню ----------
-  var ROUTES = [['home', 'Главная'], ['prices', 'Прайсы и конкуренты'], ['clients', 'Клиентская база'], ['plans', 'Планы продаж'], ['fact', 'Выполнение планов'], ['training', 'Обучение']];
+  var ROUTES = [['home', 'Главная'], ['prices', 'Прайсы и конкуренты'], ['clients', 'Клиентская база'], ['plans', 'Планы продаж'], ['fact', 'Выполнение планов'], ['money', 'Деньги'], ['training', 'Обучение']];
   function drawNav(cur) {
     navEl.innerHTML = ROUTES.map(function (r) {
       return '<a href="#' + r[0] + '" class="' + (r[0] === cur ? 'on' : '') + '">' + esc(r[1]) + (r[0] === 'home' && pendingCount ? '<span class="badge">' + pendingCount + '</span>' : '') + '</a>';
@@ -258,6 +259,7 @@
       if (s.widget === 'fact') factWidget(w);
       if (s.widget === 'plans') plansWidget(w);
       if (s.widget === 'grading') gradingWidget(w);
+      if (s.widget === 'money') moneyWidget(w);
     }).catch(fail);
   }
 
@@ -381,6 +383,102 @@
     hit.addEventListener('touchmove', function (e) { show(e.touches[0].clientX); }, { passive: true });
   }
   function niceMax(v) { var p = Math.pow(10, Math.floor(Math.log10(v))), n = v / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
+
+  // ---------- деньги: план поступлений и поступления ----------
+  var moneyState = { tab: 'plan', pp: 'week', ip: 'month' };
+  function rub(x) { return x == null || !isFinite(x) ? '—' : Math.round(x).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'; }
+  function iso(d) { return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function dayLabel(s) { var d = new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10)); return s.slice(8, 10) + '.' + s.slice(5, 7) + ' ' + ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][d.getDay()]; }
+  function periods() {
+    var t = new Date(); t.setHours(0, 0, 0, 0);
+    var add = function (d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; };
+    var mon = add(t, -((t.getDay() + 6) % 7)), m1 = new Date(t.getFullYear(), t.getMonth(), 1), mEnd = new Date(t.getFullYear(), t.getMonth() + 1, 0);
+    var n1 = new Date(t.getFullYear(), t.getMonth() + 1, 1), nEnd = new Date(t.getFullYear(), t.getMonth() + 2, 0), p1 = new Date(t.getFullYear(), t.getMonth() - 1, 1), pEnd = new Date(t.getFullYear(), t.getMonth(), 0);
+    var y1 = add(t, -1), y2 = add(t, -1); if (t.getDay() === 1) y1 = add(t, -3); else if (t.getDay() === 0) { y1 = add(t, -2); y2 = add(t, -2); }
+    return {
+      plan: [['today', 'Сегодня', t, t], ['tomorrow', 'Завтра', add(t, 1), add(t, 1)], ['week', 'Эта неделя', mon, add(mon, 6)], ['rest', 'Остаток месяца', t, mEnd], ['month', 'Весь месяц', m1, mEnd], ['next', cap(MONTHS[n1.getMonth()]), n1, nEnd]],
+      inc: [['yday', 'Вчера', y1, y2], ['today', 'Сегодня', t, t], ['week', 'Эта неделя', mon, t], ['month', cap(MONTHS[t.getMonth()]), m1, t], ['prev', cap(MONTHS[p1.getMonth()]), p1, pEnd]], today: iso(t), m1: iso(m1)
+    };
+  }
+  function byZoneMgr(rows, val) {
+    var Z = {}; rows.forEach(function (r) { var z = Z[r.zone] = Z[r.zone] || { s: 0, n: 0, m: {} }; z.s += val(r); z.n++; var m = z.m[r.mgr] = z.m[r.mgr] || { s: 0, n: 0 }; m.s += val(r); m.n++; });
+    var tot = rows.reduce(function (s, r) { return s + val(r); }, 0);
+    return '<div class="tw"><table class="t"><thead><tr><th>Регион / менеджер</th><th>Сумма</th><th>Шт.</th><th>Доля</th></tr></thead><tbody>' +
+      ['Центр', 'Юг', 'Север'].map(function (zn) { var z = Z[zn]; if (!z) return ''; return '<tr class="grp"><td colspan="4">' + zn + ' · ' + rub(z.s) + '</td></tr>' +
+        Object.keys(z.m).sort(function (a, b) { return z.m[b].s - z.m[a].s; }).map(function (k) { return '<tr><td>' + esc(k) + '</td><td>' + rub(z.m[k].s) + '</td><td>' + z.m[k].n + '</td><td>' + pct(tot ? z.m[k].s / tot : 0) + '</td></tr>'; }).join(''); }).join('') +
+      '<tr class="tot"><td>Итого</td><td>' + rub(tot) + '</td><td>' + rows.length + '</td><td></td></tr></tbody></table></div>';
+  }
+  function byDayTable(rows, key, val) {
+    var D = {}; rows.forEach(function (r) { var d = r[key]; if (!d) return; D[d] = D[d] || { s: 0, n: 0 }; D[d].s += val(r); D[d].n++; });
+    var ks = Object.keys(D).sort(), max = 0; ks.forEach(function (k) { if (D[k].s > max) max = D[k].s; });
+    if (!ks.length) return '<div class="muted">Нет данных за период.</div>';
+    return '<div class="tw"><table class="t"><thead><tr><th>День</th><th class="l" style="width:45%"></th><th>Сумма</th><th>Шт.</th></tr></thead><tbody>' + ks.map(function (k) {
+      return '<tr><td>' + dayLabel(k) + '</td><td class="l"><div class="bar" style="margin:0;height:8px"><i style="width:' + (max ? D[k].s / max * 100 : 0).toFixed(1) + '%"></i></div></td><td>' + rub(D[k].s) + '</td><td>' + D[k].n + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+  }
+  function tgHtml(s) { return esc(s).replace(/&lt;(\/?)(b|i|pre|code)&gt;/g, '<$1$2>').replace(/&amp;(lt|gt|amp|quot);/g, '&$1;'); }
+  function moneyWidget(w) {
+    w.innerHTML = '<div class="loading">Загружаю…</div>';
+    api('/api/money').then(function (j) {
+      if (j.none) { w.innerHTML = '<div class="card">Данных пока нет — первая выгрузка из мс идёт.' + (STATIC ? '' : '<div style="margin-top:10px"><button class="btn pri" id="mrf" type="button">Загрузить из МойСклад</button></div>') + '</div>'; bindMoneyRefresh(w); return; }
+      var P = periods(), st = moneyState;
+      var upd = j.updated ? j.updated.slice(8, 10) + '.' + j.updated.slice(5, 7) + ' ' + j.updated.slice(11, 16) : '';
+      var html = '<div class="card"><div class="row" style="justify-content:space-between"><div class="seg" id="mtab"><button type="button" data-t="plan" class="' + (st.tab === 'plan' ? 'on' : '') + '">План поступлений</button><button type="button" data-t="inc" class="' + (st.tab === 'inc' ? 'on' : '') + '">Поступления</button><button type="button" data-t="bot" class="' + (st.tab === 'bot' ? 'on' : '') + '">Как в боте</button></div>' +
+        (STATIC ? '' : '<button class="btn" id="mrf" type="button">' + (j.running ? '⏳ Обновляю…' : '↻ Обновить из мс') + '</button>') + '</div>' +
+        '<div class="note">Данные МойСклад на ' + esc(upd) + (STATIC ? ' · копия обновляется каждые 2 часа' : ' · обновляются каждый час с 8 до 20') + '</div></div>';
+      if (st.tab === 'plan') {
+        var per = P.plan.filter(function (x) { return x[0] === st.pp; })[0] || P.plan[2], a = iso(per[2]), b = iso(per[3]);
+        var ok = j.plan.filter(function (r) { return r.ok && r.date && r.date >= a && r.date <= b; });
+        var noSum = ok.filter(function (r) { return !r.pay; });
+        var val = function (r) { return r.pay || 0; };
+        var tot = ok.reduce(function (s, r) { return s + val(r); }, 0);
+        html += '<div class="card"><div class="seg" id="mper">' + P.plan.map(function (x) { return '<button type="button" data-p="' + x[0] + '" class="' + (x[0] === per[0] ? 'on' : '') + '">' + esc(x[1]) + '</button>'; }).join('') + '</div>' +
+          '<div class="tiles" style="margin-top:12px"><div class="tile"><div class="k">Ожидается по «Дате оплаты»</div><div class="v">' + rub(tot) + '</div><div class="s">' + ok.length + ' заказ(ов) · ' + dayLabel(a) + (a !== b ? ' – ' + dayLabel(b) : '') + '</div></div>' +
+          ['Центр', 'Юг', 'Север'].map(function (z) { var s = ok.filter(function (r) { return r.zone === z; }).reduce(function (x, r) { return x + val(r); }, 0); return '<div class="tile"><div class="k">' + z + '</div><div class="v">' + rub(s) + '</div><div class="s">' + pct(tot ? s / tot : 0) + '</div></div>'; }).join('') + '</div>' +
+          (noSum.length ? '<div class="note err">⚠️ Не заполнена «Сумма оплаты»: ' + noSum.length + ' — ' + noSum.map(function (r) { return esc(r.num); }).join(', ') + '</div>' : '') + '</div>';
+        html += '<div class="grid"><div class="card"><h3>По дням</h3>' + byDayTable(ok, 'date', val) + '</div><div class="card"><h3>По регионам и менеджерам</h3>' + byZoneMgr(ok, val) + '</div></div>';
+        html += '<div class="card"><h3>Заказы</h3><div class="tw" style="max-height:70vh"><table class="t"><thead><tr><th>Дата оплаты</th><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Сумма оплаты</th><th>Сумма заказа</th><th>Уже оплачено</th></tr></thead><tbody>' +
+          ok.slice().sort(function (x, y) { return x.date < y.date ? -1 : x.date > y.date ? 1 : (y.pay || 0) - (x.pay || 0); }).map(function (r) {
+            return '<tr><td>' + dayLabel(r.date) + '</td><td class="l">' + esc(r.client || '—') + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.pay) + '</b></td><td>' + rub(r.osum) + '</td><td>' + (r.payed ? rub(r.payed) : '—') + '</td></tr>';
+          }).join('') + '</tbody></table></div></div>';
+        // ожидались в этом месяце до сегодняшнего дня, а заказ оплачен не полностью
+        var late = j.plan.filter(function (r) { return r.ok && r.date && r.date >= P.m1 && r.date < P.today && r.payed < r.osum - 1; });
+        if (late.length) html += '<div class="card"><h3>Дата оплаты прошла, заказ оплачен не полностью · ' + late.length + '</h3><div class="tw" style="max-height:60vh"><table class="t"><thead><tr><th>Дата оплаты</th><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Ждали</th><th>Осталось по заказу</th></tr></thead><tbody>' +
+          late.sort(function (x, y) { return (y.osum - y.payed) - (x.osum - x.payed); }).map(function (r) { return '<tr><td>' + dayLabel(r.date) + '</td><td class="l">' + esc(r.client || '—') + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td>' + rub(r.pay) + '</td><td class="neg">' + rub(r.osum - r.payed) + '</td></tr>'; }).join('') +
+          '</tbody></table></div><div class="note">Текущий месяц: заказы, у которых «Дата оплаты» уже прошла, а оплачено меньше суммы заказа. Повод позвонить клиенту.</div></div>';
+      } else if (st.tab === 'inc') {
+        var pi = P.inc.filter(function (x) { return x[0] === st.ip; })[0] || P.inc[3], a2 = iso(pi[2]), b2 = iso(pi[3]);
+        var rows = j.inc.filter(function (r) { return r.day >= a2 && r.day <= b2; }), v2 = function (r) { return r.sum; };
+        var tot2 = rows.reduce(function (s, r) { return s + r.sum; }, 0), cash = rows.filter(function (r) { return r.kind === 'cashin'; }).reduce(function (s, r) { return s + r.sum; }, 0);
+        var C = {}; rows.forEach(function (r) { var k = r.client || '—'; C[k] = C[k] || { s: 0, n: 0, m: r.mgr }; C[k].s += r.sum; C[k].n++; });
+        var top = Object.keys(C).sort(function (x, y) { return C[y].s - C[x].s; }).slice(0, 25);
+        html += '<div class="card"><div class="seg" id="mper">' + P.inc.map(function (x) { return '<button type="button" data-p="' + x[0] + '" class="' + (x[0] === pi[0] ? 'on' : '') + '">' + esc(x[1]) + '</button>'; }).join('') + '</div>' +
+          '<div class="tiles" style="margin-top:12px"><div class="tile"><div class="k">Поступило</div><div class="v">' + rub(tot2) + '</div><div class="s">' + rows.length + ' платеж(ей) · ' + dayLabel(a2) + (a2 !== b2 ? ' – ' + dayLabel(b2) : '') + '</div></div>' +
+          ['Центр', 'Юг', 'Север'].map(function (z) { var s = rows.filter(function (r) { return r.zone === z; }).reduce(function (x, r) { return x + r.sum; }, 0); return '<div class="tile"><div class="k">' + z + '</div><div class="v">' + rub(s) + '</div><div class="s">' + pct(tot2 ? s / tot2 : 0) + '</div></div>'; }).join('') +
+          '<div class="tile"><div class="k">Из них касса</div><div class="v">' + rub(cash) + '</div></div></div></div>';
+        html += '<div class="grid"><div class="card"><h3>По дням</h3>' + byDayTable(rows, 'day', v2) + '</div><div class="card"><h3>По регионам и менеджерам</h3>' + byZoneMgr(rows, v2) + '</div></div>';
+        html += '<div class="card"><h3>Крупнейшие плательщики</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Сумма</th><th>Платежей</th></tr></thead><tbody>' +
+          top.map(function (k) { return '<tr><td class="l">' + esc(k) + '</td><td class="l">' + esc(C[k].m) + '</td><td>' + rub(C[k].s) + '</td><td>' + C[k].n + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+          '<div class="note">Как в боте: входящие платежи + касса по всем юрлицам, менеджер — по «Менеджеру ОП» или владельцу документа. Для плана/факта отдела (раздел «Выполнение») считается по методике Десанта — цифры могут немного отличаться.</div></div>';
+      } else {
+        var names = { today: 'Оплаты на сегодня', week: 'Оплаты на неделю', month: 'Остаток месяца', in_days: 'Поступило вчера и сегодня', in_month: 'Поступило за месяц' };
+        html += '<div class="grid">' + ['today', 'week', 'month', 'in_days', 'in_month'].map(function (k) { return j.texts[k] ? '<div class="card"><div class="small muted" style="margin-bottom:6px">' + names[k] + '</div><div style="white-space:pre-wrap;overflow-wrap:anywhere">' + tgHtml(j.texts[k]) + '</div></div>' : ''; }).join('') + '</div>';
+      }
+      w.innerHTML = html;
+      w.querySelector('#mtab').addEventListener('click', function (e) { var t = e.target.getAttribute('data-t'); if (t) { moneyState.tab = t; moneyWidget(w); } });
+      var mp = w.querySelector('#mper'); if (mp) mp.addEventListener('click', function (e) { var p = e.target.getAttribute('data-p'); if (!p) return; if (moneyState.tab === 'plan') moneyState.pp = p; else moneyState.ip = p; moneyWidget(w); });
+      bindMoneyRefresh(w);
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+  function bindMoneyRefresh(w) {
+    var b = document.getElementById('mrf'); if (!b) return;
+    b.addEventListener('click', function () {
+      b.disabled = true; b.textContent = '⏳ Обновляю… (~1 мин)';
+      api('/api/jobs/money', { json: {} }).then(function () {
+        var n = 0, t = setInterval(function () { api('/api/money').then(function (j) { n++; if (!j.running || n > 40) { clearInterval(t); moneyWidget(w); } }); }, 5000);
+      }).catch(function (e) { b.textContent = 'Ошибка: ' + e.message; });
+    });
+  }
 
   // ---------- планы ----------
   function plansWidget(w) {
