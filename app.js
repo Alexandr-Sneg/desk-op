@@ -50,17 +50,29 @@
       var f = document.getElementById('pf'), e = document.getElementById('pe');
       f.addEventListener('submit', function (ev) {
         ev.preventDefault(); e.textContent = 'Проверяю…'; var b = f.querySelector('button'); b.disabled = true;
-        var pass = document.getElementById('pp').value;
+        var variants = passVariants(document.getElementById('pp').value);
         fetch('meta.json?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (m) {
-          return crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']).then(function (pk) {
-            return crypto.subtle.deriveBits({ name: 'PBKDF2', salt: b64ToBytes(m.salt), iterations: m.iter, hash: 'SHA-256' }, pk, 256);
-          });
-        }).then(function (bits) {
-          return importRaw(bits).then(function (key) { return loadData(key).then(function () { try { localStorage.setItem(LS, bytesToB64(bits)); } catch (x) {} }); });
+          // пробуем варианты ввода по очереди: как есть, без пробелов, русская раскладка, без заглавной первой буквы
+          function tryAt(i) {
+            if (i >= variants.length) return Promise.reject(new Error('bad'));
+            return crypto.subtle.importKey('raw', new TextEncoder().encode(variants[i]), 'PBKDF2', false, ['deriveBits']).then(function (pk) {
+              return crypto.subtle.deriveBits({ name: 'PBKDF2', salt: b64ToBytes(m.salt), iterations: m.iter, hash: 'SHA-256' }, pk, 256);
+            }).then(function (bits) {
+              return importRaw(bits).then(function (key) { return loadData(key).then(function () { try { localStorage.setItem(LS, bytesToB64(bits)); } catch (x) {} }); });
+            }).catch(function () { return tryAt(i + 1); });
+          }
+          return tryAt(0);
         }).then(function () { document.querySelector('.nav').style.display = ''; ok(); })
-          .catch(function () { e.textContent = 'Неверный пароль'; b.disabled = false; });
+          .catch(function () { e.textContent = 'Неверный пароль. Проверьте раскладку: пароль латиницей, например vzqt-…'; b.disabled = false; });
       });
     });
+  }
+  var RU = 'йцукенгшщзхъфывапролджэячсмитьбюё', EN = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+  function passVariants(p) {
+    var t = p.replace(/^\s+|\s+$/g, ''), lay = '', out = [];
+    for (var i = 0; i < t.length; i++) { var ch = t.charAt(i), lo = ch.toLowerCase(), k = RU.indexOf(lo); lay += k < 0 ? ch : (ch !== lo ? EN.charAt(k).toUpperCase() : EN.charAt(k)); }
+    [p, t, lay, t.charAt(0).toLowerCase() + t.slice(1), lay.charAt(0).toLowerCase() + lay.slice(1)].forEach(function (x) { if (x && out.indexOf(x) < 0) out.push(x); });
+    return out;
   }
   function q(url, k) { var m = url.match(new RegExp('[?&]' + k + '=([^&]*)')); return m ? decodeURIComponent(m[1]) : ''; }
   function staticApi(url) {
