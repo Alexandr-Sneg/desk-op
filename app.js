@@ -87,6 +87,7 @@
     var one = { '/api/forecast': 'forecastBlob', '/api/debts': 'debtsBlob', '/api/sleeping': 'sleepingBlob' }[p];
     if (one) return D[one] ? blobJson(D[one]) : Promise.resolve({ none: true });
     if (p === '/api/managers') return Promise.resolve(D.managers || []);
+    if (p === '/api/messages') return D.messagesBlob ? blobJson(D.messagesBlob) : Promise.reject(new Error('Нет данных'));
     if (p === '/api/training') return D.trainingBlob ? blobJson(D.trainingBlob) : Promise.reject(new Error('Нет данных обучения'));
     if (p === '/api/training/answers') { var tb = (D.trainingAnswers || {})[q(url, 'mgr') + '|' + q(url, 'lesson')]; return tb ? blobJson(tb) : Promise.reject(new Error('Нет данных')); }
     if (p === '/api/competitors') return D.competitorsBlob ? blobJson(D.competitorsBlob) : Promise.resolve({ none: true });
@@ -136,7 +137,7 @@
 
   // ---------- меню ----------
   var ROUTES = [['home', 'Главная'], ['maneuver', 'Планирование'], ['fact', 'Выполнение'], ['money', 'Деньги'], ['debts', 'Дебиторка'], ['managers', 'Менеджеры'], ['clients', 'Клиентская база'], ['sleeping', 'Засыпающие'],
-    ['plans', 'Планы'], ['prices', 'Прайсы и конкуренты'], ['redaction', 'Редакция'], ['training', 'Обучение']];
+    ['plans', 'Планы'], ['prices', 'Прайсы и конкуренты'], ['redaction', 'Редакция'], ['training', 'Обучение'], ['messages', 'Сообщения'], ['system', 'Система']];
   function drawNav(cur) {
     navEl.innerHTML = ROUTES.map(function (r) {
       return '<a href="#' + r[0] + '" class="' + (r[0] === cur ? 'on' : '') + '">' + esc(r[1]) + (r[0] === 'home' && pendingCount ? '<span class="badge">' + pendingCount + '</span>' : '') + '</a>';
@@ -294,6 +295,8 @@
       if (s.widget === 'pricing') pricingWidget(w);
       if (s.widget === 'redaction') redactionWidget(w);
       if (s.widget === 'training') trainingWidget(w);
+      if (s.widget === 'messages') messagesWidget(w);
+      if (s.widget === 'system') systemWidget(w);
       if (s.widget === 'forecast') forecastWidget(w);
       if (s.widget === 'debts') debtsWidget(w);
       if (s.widget === 'managers') managersWidget(w);
@@ -885,6 +888,59 @@
     draw();
   }
 
+  // ---------- «Сообщения менеджерам» через бота ----------
+  function messagesWidget(w) {
+    w.innerHTML = '<div class="loading">Загружаю…</div>';
+    api('/api/messages').then(function (x) {
+      var h = '';
+      if (STATIC) h += '<div class="card"><b>Написать с телефона</b><div class="note" style="margin-top:4px">В чате с ботом @ms_alex_bot отправьте: <b>Фамилия: текст</b> — например «Удальцова: перезвони Агроцентру сегодня». Бот перешлёт менеджеру, ответ придёт вам.</div><a class="btn" href="' + BOT + '" target="_blank" rel="noopener">Открыть бота</a></div>';
+      else h += '<div class="card"><h3 style="margin-top:0">Написать менеджерам</h3><textarea id="mtext" rows="4" style="width:100%;font:inherit;font-size:16px;padding:8px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--text)" placeholder="Текст сообщения (придёт от бота @ms_alex_bot)"></textarea>' +
+        '<div class="row" style="margin-top:8px"><span class="small">Приложить урок с тестом:</span><select id="mles"><option value="">— без урока —</option>' + x.lessons.map(function (l) { return '<option value="' + l.id + '">' + l.id.replace('_', '.') + ' ' + esc(l.title) + '</option>'; }).join('') + '</select></div>' +
+        '<div class="row" style="margin-top:8px">' + x.managers.map(function (m) { return '<label class="small" style="display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 8px' + (m.connected ? '' : ';opacity:.5') + '"><input type="checkbox" class="mm" value="' + esc(m.key) + '"' + (m.connected ? '' : ' disabled') + '> ' + esc(m.key) + '</label>'; }).join('') +
+        '<button class="btn" type="button" id="mall" style="min-height:32px;padding:4px 10px">все</button></div>' +
+        '<div class="row" style="margin-top:10px"><button class="btn pri" type="button" id="msend">✉ Отправить</button></div><div class="note" id="mmsg">Серым — не подключены к боту: личная ссылка в «Обучение» → «Подключение менеджеров». Ответы менеджеров приходят вам в Telegram и сюда.</div></div>';
+      h += '<div class="card"><h3 style="margin-top:0">Ответы менеджеров · ' + x.inbox.length + '</h3>' + (x.inbox.length ? x.inbox.map(function (i) { return '<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>' + esc(i.mgr) + '</b> <span class="small muted">' + esc(i.at) + '</span><div style="white-space:pre-wrap">' + esc(i.text) + '</div></div>'; }).join('') : '<div class="muted">Пока нет.</div>') + '</div>';
+      h += '<div class="card fold"><h3>Отправленные · ' + x.messages.length + '</h3>' + x.messages.map(function (m) { return '<div style="padding:8px 0;border-bottom:1px solid var(--line)"><span class="small muted">' + esc(m.at) + ' → ' + esc(m.to.join(', ')) + '</span>' + (m.lesson ? ' <span class="st idle">урок ' + m.lesson.replace('_', '.') + '</span>' : '') + '<div style="white-space:pre-wrap">' + esc(m.text) + '</div></div>'; }).join('') + '</div>';
+      w.innerHTML = h;
+      if (STATIC) return;
+      w.querySelector('#mall').addEventListener('click', function () { var cs = w.querySelectorAll('.mm:not([disabled])'); for (var i = 0; i < cs.length; i++) cs[i].checked = true; });
+      w.querySelector('#msend').addEventListener('click', function () {
+        var ms = [], cs = w.querySelectorAll('.mm:checked'); for (var i = 0; i < cs.length; i++) ms.push(cs[i].value);
+        var text = w.querySelector('#mtext').value, les = w.querySelector('#mles').value, msg = w.querySelector('#mmsg'), btn = this;
+        if (!ms.length) { msg.className = 'note err'; msg.textContent = 'Отметьте получателей.'; return; }
+        if (!text.trim() && !les) { msg.className = 'note err'; msg.textContent = 'Напишите текст или приложите урок.'; return; }
+        btn.disabled = true; msg.className = 'note'; msg.textContent = '⏳ Отправляю…';
+        api('/api/messages/send', { json: { mgrs: ms, text: text, lesson: les }, soft: true }).then(function (r) { btn.disabled = false; msg.className = 'note ' + (r.ok ? '' : 'err'); msg.textContent = r.msg; if (r.ok) setTimeout(function () { messagesWidget(w); }, 1500); });
+      });
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+
+  // ---------- «Система»: всё ли работает без Claude ----------
+  function systemWidget(w) {
+    if (STATIC) { w.innerHTML = '<div class="card">Состояние системы и кнопки перезапуска — на компе. Если что-то сломается, сторож сам напишет в Telegram.</div>'; return; }
+    w.innerHTML = '<div class="loading">Проверяю…</div>';
+    api('/api/system').then(function (x) {
+      var hl = x.health || { checks: [] };
+      var h = '<div class="card"><h3 style="margin-top:0">' + (hl.ok ? '🟢 Всё работает' : '🔴 Есть проблемы') + ' <span class="small muted">проверка сторожа ' + esc(hl.at || '—') + ' · каждые 15 минут</span></h3>' +
+        hl.checks.map(function (c) { return '<div style="display:flex;gap:8px;padding:4px 0"><span>' + (c.ok ? '🟢' : '🔴') + '</span><span><b>' + esc(c.title) + '</b> — ' + esc(c.detail) + (c.fix ? ' <span class="small muted">(' + esc(c.fix) + ')</span>' : '') + '</span></div>'; }).join('') +
+        '<div class="row" style="margin-top:10px"><button class="btn" data-run="watchdog" type="button">🩺 Проверить сейчас</button><button class="btn" data-run="bot" type="button">↻ Перезапустить бота</button><button class="btn" data-run="server" type="button">↻ Перезапустить сервер</button></div><div class="note" id="smsg2">Всё работает само: сервер и бот запускаются при входе в Windows, данные из мс — каждые 2 часа, градация и прайсы — 1-го числа, копия для телефона — после каждого обновления. Сторож сам перезапускает упавшее и пишет в Telegram.</div></div>';
+      h += '<div class="card fold"><h3>Задания Планировщика</h3><div class="tw"><table class="t"><thead><tr><th class="l">Задание</th><th>Состояние</th><th>Следующий</th><th>Прошлый</th><th>Код</th></tr></thead><tbody>' +
+        x.tasks.map(function (t) { var ok = [0, 267009, 267011].indexOf(+t.code) >= 0; return '<tr><td class="l">' + esc(t.name) + '</td><td>' + esc(t.state === 'Running' ? 'работает' : t.state === 'Ready' ? 'ждёт' : t.state) + '</td><td>' + esc(t.next) + '</td><td>' + esc(t.last) + '</td><td class="' + (ok ? '' : 'neg') + '">' + esc(t.code) + '</td></tr>'; }).join('') + '</tbody></table></div><div class="note">Код 0 / 267009 / 267011 — норма (выполнено / работает / ещё не запускалось).</div></div>';
+      h += '<div class="card fold"><h3>Сменить пароль</h3><label class="small">Текущий пароль</label><input type="password" id="pold" style="width:100%"><label class="small" style="margin-top:8px;display:block">Новый пароль (не короче 10 символов)</label><input type="password" id="pnew" style="width:100%"><div class="row" style="margin-top:10px"><button class="btn pri" type="button" id="pgo">Сменить</button></div><div class="note" id="pmsg2"></div></div>';
+      h += '<div class="card fold"><h3>Журналы</h3>' + ['server', 'bot', 'pages', 'errors'].map(function (k) { return '<b class="small">' + { server: 'Сервер', bot: 'Бот', pages: 'Копия для телефона', errors: 'Ошибки сервера' }[k] + '</b><pre style="white-space:pre-wrap;font-size:12px;max-height:200px;overflow:auto;background:var(--surface-2);padding:8px;border-radius:8px">' + esc((x.logs[k] || []).join('\n') || '—') + '</pre>'; }).join('') + '</div>';
+      w.innerHTML = h;
+      w.addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('button[data-run]') : null; if (!b) return;
+        var what = b.getAttribute('data-run'); if (what === 'server' && !window.confirm('Перезапустить сервер? Страница будет недоступна ~15 секунд.')) return;
+        b.disabled = true; api('/api/system/run', { json: { what: what }, soft: true }).then(function (r) { var m = w.querySelector('#smsg2'); m.textContent = r.msg; if (what === 'watchdog') setTimeout(function () { systemWidget(w); }, 60000); });
+      });
+      w.querySelector('#pgo').addEventListener('click', function () {
+        var m = w.querySelector('#pmsg2'); m.className = 'note'; m.textContent = '⏳';
+        api('/api/system/password', { json: { old: w.querySelector('#pold').value, new: w.querySelector('#pnew').value }, soft: true }).then(function (r) { m.className = 'note ' + (r.ok ? '' : 'err'); m.textContent = r.msg; if (r.ok) setTimeout(function () { location.href = '/login'; }, 2500); });
+      });
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+
   // ---------- общие кусочки для новых разделов ----------
   function mln(x, d) { return x == null || !isFinite(x) ? '—' : num(x / 1e6, d == null ? 1 : d); }
   function mgrLink(n) { return '<a href="#mgr/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'; }
@@ -1210,7 +1266,7 @@
           if (!p) return;
           if (k.slice(0, 4) !== year) { year = k.slice(0, 4); html += '<tr class="grp"><td colspan="8">' + year + '</td></tr>'; }
           var other = dv ? (m[variant.slice(0, 5)] || m.plan || {})['Отдел'] : (bk ? bk[variant === 'plan2' ? 'plan2d' : 'plan1d']['Отдел'] : null);
-          html += '<tr><td>' + cap(MONTHS[+k.slice(5) - 1]) + (m.plan && !dv ? ' <span class="small muted">утв.</span>' : '') + '</td><td>' + num(p['Ц']) + '</td><td>' + num(p['Ю']) + '</td><td>' + num(p['С']) + '</td><td><b>' + num(p['Отдел']) + '</b></td>' +
+          html += '<tr><td>' + cap(MONTHS[+k.slice(5) - 1]) + (m.plan && !dv ? ' <span class="small muted">утв.</span>' : '') + (m.auto ? ' <span class="small muted" title="посчитан автоматически по правилу рекорд месяца + надбавка">авто</span>' : '') + '</td><td>' + num(p['Ц']) + '</td><td>' + num(p['Ю']) + '</td><td>' + num(p['С']) + '</td><td><b>' + num(p['Отдел']) + '</b></td>' +
             (dv ? '<td class="small">' + num(bk.dept) + ' <span class="muted">' + bk.src.slice(0, 4) + '</span></td>' : '<td class="small muted">' + (other != null ? num(other) : '—') + '</td>') +
             '<td>' + (fa ? num(fa['Отдел']) : '—') + '</td><td>' + (fa ? pct(fa['Отдел'] / p['Отдел']) : '') + '</td></tr>';
         });
