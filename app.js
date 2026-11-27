@@ -522,7 +522,7 @@
   }
 
   // ---------- кнопки обновлений (на компе — сразу, на телефоне — через бота) ----------
-  var MGRS = ['Пронткилевич', 'Станевская', 'Удальцова', 'Дворин', 'Кузьмич', 'Гоголюк', 'Филимонова', 'Прохорович', 'Шандроха'];
+  var MGRS = ['Пронткилевич', 'Станевская', 'Удальцова', 'Дворин', 'Кузьмич', 'Гоголюк', 'Филимонова', 'Прохорович'];
   function botLink(cmd) { return BOT + '?start=' + cmd; }
   var JOB_TITLES = { data: 'Данные из мс', bot: 'Отчёты бота', prices: 'Прайсы по МС', comp: 'Конкурентный анализ', grad: 'Градация клиентов', pages: 'Копия для телефона' };
   function jobLine(j) {
@@ -854,7 +854,7 @@
   // ---------- общие кусочки для новых разделов ----------
   function mln(x, d) { return x == null || !isFinite(x) ? '—' : num(x / 1e6, d == null ? 1 : d); }
   function mgrLink(n) { return '<a href="#mgr/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'; }
-  function isMgr(n) { return ['Пронткилевич', 'Станевская', 'Удальцова', 'Дворин', 'Кузьмич', 'Гоголюк', 'Филимонова', 'Прохорович', 'Шандроха'].indexOf(n) >= 0; }
+  function isMgr(n) { return ['Пронткилевич', 'Станевская', 'Удальцова', 'Дворин', 'Кузьмич', 'Гоголюк', 'Филимонова', 'Прохорович'].indexOf(n) >= 0; }
   function mName(n) { return isMgr(n) ? mgrLink(n) : esc(n) + ' <span class="small muted">не в ОП</span>'; }
   function details(title, inner, open) { return '<details class="card"' + (open ? ' open' : '') + '><summary style="cursor:pointer;font-weight:650">' + title + '</summary><div style="margin-top:10px">' + inner + '</div></details>'; }
   function updLine(st, label) { if (!st || !st.updated) return ''; return esc(label) + ' ' + st.updated.slice(8, 10) + '.' + st.updated.slice(5, 7) + ' ' + st.updated.slice(11, 16); }
