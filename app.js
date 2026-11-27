@@ -87,6 +87,8 @@
     var one = { '/api/forecast': 'forecastBlob', '/api/debts': 'debtsBlob', '/api/sleeping': 'sleepingBlob' }[p];
     if (one) return D[one] ? blobJson(D[one]) : Promise.resolve({ none: true });
     if (p === '/api/managers') return Promise.resolve(D.managers || []);
+    if (p === '/api/competitors') return D.competitorsBlob ? blobJson(D.competitorsBlob) : Promise.resolve({ none: true });
+    if (p === '/api/actionpreview') { var ab = (D.previewBlobs || {})[q(url, 'id')]; return ab ? blobJson(ab) : Promise.resolve({ error: 'Детали правки есть на компе' }); }
     if (p === '/api/manager') { var mb = (D.managerBlobs || {})[q(url, 'm')]; return mb ? blobJson(mb) : Promise.resolve({ error: 'Нет данных' }); }
     if (p === '/api/products') { var pb = D.productsBlobs || {}, pm = q(url, 'ym'); if (!pb[pm]) pm = D.productsLast; return pb[pm] ? blobJson(pb[pm]) : Promise.resolve({ none: true }); }
     if (p === '/api/grading/plan') { var n = D.gradPlans[q(url, 'date')]; return n ? blobJson(n) : Promise.reject(new Error('Нет списка')); }
@@ -186,6 +188,8 @@
       (can && !STATIC ? '<button class="btn ok" data-do="ok" type="button">✅ Подтвердить</button><button class="btn no" data-do="no" type="button">❌ Отклонить</button>' : '') +
       (can && STATIC ? '<a class="btn ok" href="' + BOT + '" target="_blank" rel="noopener">Подтвердить в Telegram</a>' : '') +
       (a.kind === 'grad' ? '<button class="btn" data-do="list" type="button">Список на передачу</button>' : '') +
+      (a.akind ? '<button class="btn" data-do="preview" type="button">' + (a.status === 'done' ? 'Что изменено' : 'Что изменится') + '</button>' : '') +
+      (!STATIC && a.status === 'done' && (a.akind === 'prices' || a.akind === 'transfer') ? '<button class="btn no" data-do="rollback" type="button">↩ Откатить</button>' : '') +
       '</div><div class="msg small" style="margin-top:8px"></div><div class="lst"></div></div>';
   }
   function bindActions(root, after) {
@@ -194,6 +198,8 @@
       var card = b.closest('.act'), kind = card.getAttribute('data-kind'), key = card.getAttribute('data-key'), what = b.getAttribute('data-do');
       var msg = card.querySelector('.msg');
       if (what === 'list') return toggleList(card, key);
+      if (what === 'preview') return showPreview(card, key);
+      if (what === 'rollback') { if (window.confirm('Подготовить откат этой правки? Он тоже выполнится только после «Подтвердить».')) propose({ type: 'rollback', id: key }, msg, b).then(function () { setTimeout(after, 1500); }); return; }
       var title = card.querySelector('.ttl').textContent;
       if (!window.confirm((what === 'ok' ? 'Подтвердить и выполнить в МойСклад?\n\n' : 'Отклонить? В мс ничего не изменится.\n\n') + title)) return;
       var btns = card.querySelectorAll('button[data-do=ok],button[data-do=no]'); for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
@@ -245,7 +251,9 @@
         html += factStatusLine(f.status) + '</div>';
       }
       var acts = h.actions;
-      html += '<div class="card"><h2>Ждут подтверждения</h2><div id="acts">' + (acts.length ? acts.map(actionHtml).join('') : '<div class="muted">Сейчас ничего не ждёт подтверждения. Когда скрипт подготовит правку в МойСклад, она появится здесь и в Telegram.</div>') + '</div></div>';
+      html += '<div class="card"><h2>Ждут подтверждения</h2><div id="acts">' + (acts.length ? acts.map(actionHtml).join('') : '<div class="muted">Сейчас ничего не ждёт подтверждения. Правки в мс готовятся кнопками в разделах (задачи по засыпающим и долгам, передача клиента, цены по конкурентам) — и появляются здесь и в Telegram.</div>') +
+        ((h.recent || []).length ? '<details style="margin-top:8px"><summary style="cursor:pointer" class="small">Недавние правки за неделю · ' + h.recent.length + '</summary><div style="margin-top:8px">' + h.recent.map(actionHtml).join('') + '</div></details>' : '') + '</div></div>';
+      html += '<div id="homejobs"></div>';
       html += '<div class="card"><h2>Лента обновлений</h2><ul class="feed">' + feed.slice(0, 40).map(function (e) {
         var t = String(e.t || ''), when = t.slice(8, 10) + '.' + t.slice(5, 7) + ' ' + t.slice(11, 16);
         var title = e.file ? '<a href="#view/' + encodeURIComponent(e.file) + '">' + esc(e.title) + '</a>' : esc(e.title);
@@ -253,6 +261,7 @@
       }).join('') + '</ul></div>';
       main.innerHTML = html;
       var ab = document.getElementById('acts'); if (ab) bindActions(ab, home);
+      jobButtons(document.getElementById('homejobs'), ['data', 'bot', 'prices', 'comp', 'grad', 'pages'], 'Обновить по запросу');
     }).catch(fail);
   }
   function factStatusLine(st) {
@@ -273,10 +282,13 @@
         (s.links.length ? '<div class="card"><h3>Ссылки</h3>' + s.links.map(function (l) { return '<div><a href="' + esc(l.url) + '" target="_blank" rel="noopener">' + esc(l.title) + ' ↗</a></div>'; }).join('') + '</div>' : '') +
         (s.groups.length ? filesHtml(s.groups) : (s.widget ? '' : '<div class="card muted">Пока пусто.</div>'));
       var w = document.getElementById('widget');
+      var sj = { maneuver: ['data'], debts: ['data'], sleeping: ['data'], managers: ['data'], clients: ['grad', 'data'], money: ['data', 'bot'] }[s.id];
+      if (sj) { var jb = document.createElement('div'); main.appendChild(jb); jobButtons(jb, sj, 'Обновить по запросу'); }
       if (s.widget === 'fact') factWidget(w);
       if (s.widget === 'plans') plansWidget(w);
       if (s.widget === 'grading') gradingWidget(w);
       if (s.widget === 'money') moneyWidget(w);
+      if (s.widget === 'pricing') pricingWidget(w);
       if (s.widget === 'forecast') forecastWidget(w);
       if (s.widget === 'debts') debtsWidget(w);
       if (s.widget === 'managers') managersWidget(w);
@@ -504,6 +516,142 @@
     });
   }
 
+  // ---------- кнопки обновлений (на компе — сразу, на телефоне — через бота) ----------
+  var MGRS = ['Пронткилевич', 'Станевская', 'Удальцова', 'Дворин', 'Кузьмич', 'Гоголюк', 'Филимонова', 'Прохорович', 'Шандроха'];
+  function botLink(cmd) { return BOT + '?start=' + cmd; }
+  var JOB_TITLES = { data: 'Данные из мс', bot: 'Отчёты бота', prices: 'Прайсы по МС', comp: 'Конкурентный анализ', grad: 'Градация клиентов', pages: 'Копия для телефона' };
+  function jobLine(j) {
+    if (j.running) return '<span class="st idle">⏳ идёт</span>';
+    if (!j.state) return '';
+    var t = j.finished || j.started || '';
+    var when = t ? t.slice(8, 10) + '.' + t.slice(5, 7) + ' ' + t.slice(11, 16) : '';
+    return j.state === 'ok' ? '<span class="small muted">обновлено ' + when + '</span>' : j.state === 'error' ? '<span class="st bad">ошибка ' + when + '</span>' : '';
+  }
+  // ids — какие обновления показать; box — куда
+  function jobButtons(box, ids, title) {
+    if (!box) return;
+    if (STATIC) {
+      box.innerHTML = '<div class="card"><div class="row" style="justify-content:space-between"><b>' + esc(title || 'Обновить') + '</b><span class="small muted">через бота в Telegram</span></div><div class="row" style="margin-top:10px">' +
+        ids.map(function (id) { return '<a class="btn" href="' + botLink('upd_' + id) + '" target="_blank" rel="noopener">↻ ' + esc(JOB_TITLES[id]) + '</a>'; }).join('') +
+        '</div><div class="note">Откроется бот — нажмите «Start/Запустить». Бот запустит обновление на компе и пришлёт итог; копия для телефона обновится сама.</div></div>';
+      return;
+    }
+    var lastMsg = null;
+    function draw() {
+      api('/api/jobs').then(function (list) {
+        var by = {}; list.forEach(function (j) { by[j.id] = j; });
+        box.innerHTML = '<div class="card"><div class="row" style="justify-content:space-between"><b>' + esc(title || 'Обновить') + '</b></div><div style="margin-top:6px">' + ids.map(function (id) {
+          var j = by[id] || { id: id, title: JOB_TITLES[id] };
+          return '<div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)"><div style="min-width:0"><div>' + esc(j.title) + '</div><div class="small muted">' + esc(j.hint || '') + '</div></div><div class="row">' + jobLine(j) +
+            '<button class="btn" type="button" data-job="' + id + '"' + (j.running ? ' disabled' : '') + '>↻ Обновить</button></div></div>';
+        }).join('') + '</div><div class="note jmsg' + (lastMsg && !lastMsg.ok ? ' err' : '') + '">' + (lastMsg ? esc(lastMsg.msg) : '') + '</div></div>';
+        if (list.some(function (j) { return j.running && ids.indexOf(j.id) >= 0; })) setTimeout(function () { if (document.body.contains(box)) draw(); }, 15000);
+      }).catch(function () {});
+    }
+    box.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button[data-job]') : null; if (!b) return;
+      b.disabled = true;
+      api('/api/jobs/run', { json: { job: b.getAttribute('data-job') }, soft: true }).then(function (r) {
+        lastMsg = r;
+        var m = box.querySelector('.jmsg'); if (m) { m.textContent = r.msg; m.className = 'note jmsg ' + (r.ok ? '' : 'err'); }
+        setTimeout(draw, 1500);
+      });
+    });
+    draw();
+  }
+  // правка в мс: подготовить (план + предпросмотр) → ждёт «Подтвердить» на главной и в Telegram
+  function propose(payload, msgEl, btn) {
+    if (btn) btn.disabled = true;
+    if (msgEl) { msgEl.className = 'note'; msgEl.textContent = '⏳ Готовлю правку…'; }
+    return api('/api/propose', { json: payload, soft: true }).then(function (r) {
+      if (msgEl) { msgEl.className = 'note ' + (r.ok ? '' : 'err'); msgEl.innerHTML = esc(r.msg) + (r.ok ? ' <a href="#home">Открыть «Ждут подтверждения» →</a>' : ''); }
+      if (r.ok) { pendingCount++; drawNav((location.hash || '#home').slice(1).split('/')[0]); }
+      if (btn) btn.disabled = false;
+      return r;
+    }).catch(function (e) { if (msgEl) { msgEl.className = 'note err'; msgEl.textContent = e.message; } if (btn) btn.disabled = false; });
+  }
+  function mgrSelect(cls, exclude) { return '<select class="' + cls + '"><option value="">Кому передать…</option>' + MGRS.filter(function (m) { return m !== exclude; }).map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select>'; }
+
+  // ---------- «Цены → в мс» по конкурентному анализу ----------
+  var priceState = { seg: 'pots', mode: 'prop' };
+  function pricingWidget(w) {
+    w.innerHTML = '<div id="pjobs"></div><div id="pprop"><div class="loading">Загружаю предложения…</div></div>';
+    jobButtons(w.querySelector('#pjobs'), ['prices', 'comp'], 'Обновить прайсы и конкурентный анализ');
+    var box = w.querySelector('#pprop');
+    api('/api/competitors').then(function (c) {
+      if (c.none || !c.segments) { box.innerHTML = '<div class="card">Предложений по ценам пока нет — нажмите «Обновить» у конкурентного анализа.</div>'; return; }
+      function draw() {
+        var seg = c.segments.filter(function (s) { return s.key === priceState.seg; })[0] || c.segments[0];
+        var rows = seg.rows.filter(function (r) { return priceState.mode === 'all' || r.newPrice; });
+        var good = function (r) { return /Снизить|Можно поднять/.test(r.prio); };
+        var html = '<div class="card"><h3>Цены → в мс <span class="small muted">анализ от ' + esc((c.date || '').slice(8, 10) + '.' + (c.date || '').slice(5, 7)) + '</span></h3>' +
+          '<div class="seg" id="psg">' + c.segments.map(function (s) { return '<button type="button" data-s="' + s.key + '" class="' + (s.key === seg.key ? 'on' : '') + '">' + esc(s.title) + (s.key === 'pots' ? ' ★' : '') + '</button>'; }).join('') + '</div> ' +
+          '<div class="seg" id="pmd" style="margin-top:8px"><button type="button" data-m="prop" class="' + (priceState.mode === 'prop' ? 'on' : '') + '">Есть предложение</button><button type="button" data-m="all" class="' + (priceState.mode === 'all' ? 'on' : '') + '">Все сравнённые</button></div>' +
+          '<div class="note">Наша цена — «' + esc(seg.store) + ' Дистр А» (= «от 500 тыс.» оптового прайса), сравнение с минимальной ценой конкурента. Новая цена ставится в Дистр А, <b>вся лесенка склада ' + esc(seg.store) + ' меняется на тот же %</b>. Перед записью — предпросмотр с текущими ценами из мс и «Подтвердить». ★ — своё производство.</div>' +
+          (STATIC ? '<div class="note err">Менять цены можно на компе (окно «Рабочий стол ОП»): здесь только просмотр.</div>' : '') +
+          '<div class="tw" style="max-height:70vh;margin-top:8px"><table class="t"><thead><tr>' + (STATIC ? '' : '<th></th>') + '<th class="l">Позиция</th><th>Наша</th><th>Мин. конкурент</th><th>Разница</th><th class="l">Предложение</th>' + (STATIC ? '' : '<th>Новая цена</th>') + '</tr></thead><tbody>' +
+          rows.map(function (r, i) {
+            var cls = r.diff > 0.03 ? 'neg' : r.diff < -0.03 ? 'pos' : '';
+            return '<tr>' + (STATIC ? '' : '<td><input type="checkbox" class="pc" data-i="' + i + '"' + (r.newPrice && good(r) && priceState.checked && priceState.checked[seg.key + r.code] ? ' checked' : '') + '></td>') +
+              '<td class="l"><b>' + esc(r.art || r.code) + '</b> ' + esc(r.name) + '<div class="small muted">' + esc(r.sub || r.sec || '') + '</div></td><td>' + num(r.our, 2) + '</td><td>' + num(r.min, 2) + ' <span class="small muted">' + esc(r.minWho) + '</span></td>' +
+              '<td class="' + cls + '">' + (r.diff > 0 ? '+' : '') + Math.round(r.diff * 100) + '%</td><td class="l small">' + esc(r.prio || r.status) + (r.why ? '<div class="muted">' + esc(r.why) + '</div>' : '') + '</td>' +
+              (STATIC ? '' : '<td><input type="text" inputmode="decimal" class="pn" data-i="' + i + '" value="' + (r.newPrice ? String(r.newPrice).replace('.', ',') : '') + '" style="width:80px;font-size:16px;padding:4px 6px"></td>') + '</tr>';
+          }).join('') + '</tbody></table></div>' +
+          (STATIC ? '' : '<div class="row" style="margin-top:12px"><button class="btn pri" type="button" id="pgo">Внести выбранные в мс…</button><span class="small muted" id="pcnt"></span></div><div class="note" id="pmsg"></div>') + '</div>';
+        box.innerHTML = html;
+        box.querySelector('#psg').addEventListener('click', function (e) { var s = e.target.getAttribute('data-s'); if (s) { priceState.seg = s; draw(); } });
+        box.querySelector('#pmd').addEventListener('click', function (e) { var m = e.target.getAttribute('data-m'); if (m) { priceState.mode = m; draw(); } });
+        if (STATIC) return;
+        var cnt = function () { box.querySelector('#pcnt').textContent = 'выбрано: ' + box.querySelectorAll('.pc:checked').length; };
+        box.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('pc')) cnt(); });
+        box.addEventListener('input', function (e) { if (e.target.classList && e.target.classList.contains('pn')) { var cb = box.querySelector('.pc[data-i="' + e.target.getAttribute('data-i') + '"]'); if (cb && e.target.value) cb.checked = true; cnt(); } });
+        cnt();
+        box.querySelector('#pgo').addEventListener('click', function () {
+          var items = [], bad = [];
+          var cbs = box.querySelectorAll('.pc:checked');
+          for (var k = 0; k < cbs.length; k++) {
+            var i = +cbs[k].getAttribute('data-i'), r = rows[i], v = parseFloat(String(box.querySelector('.pn[data-i="' + i + '"]').value).replace(',', '.').replace(/\s/g, ''));
+            if (!(v > 0)) { bad.push(r.art || r.code); continue; }
+            if (Math.abs(v / r.our - 1) > 0.4) { bad.push((r.art || r.code) + ' (изменение больше 40%)'); continue; }
+            items.push({ code: r.code, newA: v });
+          }
+          var msg = box.querySelector('#pmsg');
+          if (bad.length) { msg.className = 'note err'; msg.textContent = 'Проверьте новую цену: ' + bad.join(', '); return; }
+          if (!items.length) { msg.className = 'note err'; msg.textContent = 'Отметьте позиции галочкой.'; return; }
+          if (!window.confirm('Подготовить изменение цен в мс по ' + items.length + ' поз. (' + seg.store + ')?\nСначала будет предпросмотр, записи — только после «Подтвердить».')) return;
+          propose({ type: 'prices', seg: seg.key, items: items }, msg, this);
+        });
+      }
+      draw();
+    }).catch(function (e) { box.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+
+  // предпросмотр правки в карточке «Ждут подтверждения»
+  function showPreview(card, id) {
+    var box = card.querySelector('.lst');
+    if (box.innerHTML) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div class="loading">Загружаю…</div>';
+    api('/api/actionpreview?id=' + encodeURIComponent(id)).then(function (p) {
+      var h = '';
+      if (p.items) h += '<div class="tw" style="max-height:55vh;margin-top:8px"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Кому</th><th class="l">Текст задачи</th></tr></thead><tbody>' +
+        p.items.map(function (i) { return '<tr><td class="l">' + esc(i.client) + '</td><td class="l">' + esc(i.who) + '</td><td class="l small">' + esc(i.desc) + '<div class="muted">срок ' + esc((i.due || '').slice(0, 10)) + '</div></td></tr>'; }).join('') + '</tbody></table></div>';
+      if (p.prices) {
+        var L = p.prices.ladder || [];
+        h += '<div class="tw" style="max-height:55vh;margin-top:8px"><table class="t"><thead><tr><th class="l">Позиция</th>' + L.map(function (n) { return '<th>' + esc(n.replace(/^(Подольск|КРД) /, '')) + '</th>'; }).join('') + '<th>%</th></tr></thead><tbody>' +
+          p.prices.items.map(function (x) {
+            if (!x.after) return '<tr><td class="l">' + esc(x.code) + ' ' + esc(x.name) + '</td><td colspan="' + (L.length + 1) + '" class="l err small">' + esc(x.warn) + '</td></tr>';
+            return '<tr><td class="l">' + esc(x.code) + ' ' + esc(x.name) + (x.warn ? '<div class="small err">' + esc(x.warn) + '</div>' : '') + '</td>' + L.map(function (n) { return '<td>' + num(x.before[n], 2) + '<br><b>' + num(x.after[n], 2) + '</b></td>'; }).join('') + '<td class="' + (x.factor < 1 ? 'neg' : 'pos') + '">' + (x.factor > 1 ? '+' : '') + num((x.factor - 1) * 100, 1) + '%</td></tr>';
+          }).join('') + '</tbody></table></div><div class="note">Сверху — сейчас в мс, снизу жирным — после правки.</div>';
+      }
+      if (p.csv) h += '<div class="tw" style="margin-top:8px"><table class="t"><thead><tr><th class="l">Карточка</th><th class="l">Что</th><th class="l">От</th><th class="l">Кому</th></tr></thead><tbody>' +
+        p.csv.map(function (r) { return '<tr><td class="l">' + esc(r.name) + (r.inn ? '<div class="small muted">ИНН ' + esc(r.inn) + '</div>' : '') + '</td><td class="l small">' + esc(r.kind) + '</td><td class="l">' + esc(r.from) + '</td><td class="l">' + esc(r.to) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+      if (p.log && p.log.length) h += '<div class="note">Журнал: ' + p.log.filter(function (l) { return l.result === 'ok'; }).length + ' выполнено, ' + p.log.filter(function (l) { return l.result === 'skip'; }).length + ' пропущено, ' + p.log.filter(function (l) { return l.result === 'error'; }).length + ' ошибок.</div>';
+      if (p.pricesLog && p.pricesLog.length) h += '<div class="note">Журнал цен: ' + p.pricesLog.filter(function (l) { return l.result === 'ok'; }).length + ' изменено, ' + p.pricesLog.filter(function (l) { return l.result !== 'ok'; }).length + ' пропущено/ошибок.</div>';
+      if (p.error) h += '<div class="note err">' + esc(p.error) + '</div>';
+      box.innerHTML = h || '<div class="muted small">Нет деталей.</div>';
+    }).catch(function (e) { box.innerHTML = '<div class="err small">' + esc(e.message) + '</div>'; });
+  }
+
   // ---------- общие кусочки для новых разделов ----------
   function mln(x, d) { return x == null || !isFinite(x) ? '—' : num(x / 1e6, d == null ? 1 : d); }
   function mgrLink(n) { return '<a href="#mgr/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'; }
@@ -629,15 +777,39 @@
       html += '<div class="card"><h3>Крупнейшие должники</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Долг</th><th>Заказов</th><th>Самый старый, дн.</th></tr></thead><tbody>' +
         d.clients.slice(0, 30).map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td class="l">' + esc(c.mgr) + '</td><td><b>' + rub(c.total) + '</b></td><td>' + c.n + '</td><td class="' + (c.maxAge > 30 ? 'neg' : '') + '">' + c.maxAge + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
       var mgrs = []; d.rows.forEach(function (r) { if (mgrs.indexOf(r.mgr) < 0) mgrs.push(r.mgr); }); mgrs.sort();
-      html += '<div class="card"><h3>Заказы с долгом</h3><div class="row" style="margin-bottom:10px"><select id="dm"><option value="">Все менеджеры</option>' + mgrs.map(function (m) { return '<option' + (m === debtState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select><input type="search" id="dq" placeholder="Клиент или № заказа" value="' + esc(debtState.q) + '" style="flex:1;min-width:0"></div><div id="dl"></div></div>';
+      html += '<div class="card"><h3>Заказы с долгом</h3><div class="row" style="margin-bottom:10px"><select id="dm"><option value="">Все менеджеры</option>' + mgrs.map(function (m) { return '<option' + (m === debtState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select><input type="search" id="dq" placeholder="Клиент или № заказа" value="' + esc(debtState.q) + '" style="flex:1;min-width:0"></div>' +
+        '<div class="row" id="dact" style="margin-bottom:10px"></div><div class="note" id="dmsg" style="margin-top:0"></div><div id="dl"></div></div>';
       w.innerHTML = html;
-      var dl = w.querySelector('#dl');
+      var dl = w.querySelector('#dl'), dact = w.querySelector('#dact'), dmsg = w.querySelector('#dmsg');
+      function drawActs() {
+        var mg = debtState.mgr && isMgr(debtState.mgr) ? debtState.mgr : '';
+        var idx = mg ? MGRS.indexOf(mg) : 'all';
+        dact.innerHTML = STATIC
+          ? '<a class="btn pri" href="' + botLink('tdb_' + idx) + '" target="_blank" rel="noopener">📝 Задачи в мс: дожать долги 31–90 дн.' + (mg ? ' (' + esc(mg) + ')' : '') + '</a><span class="small muted">через бота, с подтверждением</span>'
+          : '<button class="btn pri" type="button" id="dall">📝 Задачи: дожать долги 31–90 дн.' + (debtState.mgr ? ' (' + esc(debtState.mgr) + ')' : '') + '</button><button class="btn" type="button" id="dold">📝 Задачи: сверить долги старше 90 дн.</button><button class="btn" type="button" id="dsel">📝 По отмеченным заказам</button>';
+        if (STATIC) return;
+        dact.querySelector('#dall').addEventListener('click', function () {
+          if (!window.confirm('Подготовить задачи «дожать оплату» по долгам 31–90 дней' + (debtState.mgr ? ' (' + debtState.mgr + ')' : '') + '?\nЗаказы бывших менеджеров — текущему владельцу клиента. Запись в мс — только после «Подтвердить».')) return;
+          propose({ type: 'tasks_debt', mgr: debtState.mgr || '', minAge: 31, maxAge: 90 }, dmsg, this);
+        });
+        dact.querySelector('#dold').addEventListener('click', function () {
+          if (!window.confirm('Подготовить задачи «сверить долг» по заказам с долгом старше 90 дней' + (debtState.mgr ? ' (' + debtState.mgr + ')' : '') + '?\nВ задаче: если оплачено — привязать платёж к заказу, если нет — дожать. Запись в мс — только после «Подтвердить».')) return;
+          propose({ type: 'tasks_debt', mgr: debtState.mgr || '', minAge: 91 }, dmsg, this);
+        });
+        dact.querySelector('#dsel').addEventListener('click', function () {
+          var cs = dl.querySelectorAll('.dc:checked'), nums = []; for (var i = 0; i < cs.length; i++) nums.push(cs[i].getAttribute('data-num'));
+          if (!nums.length) { dmsg.className = 'note err'; dmsg.textContent = 'Отметьте заказы галочкой.'; return; }
+          if (!window.confirm('Подготовить задачи по ' + nums.length + ' заказам? Запись в мс — только после «Подтвердить».')) return;
+          propose({ type: 'tasks_debt', nums: nums }, dmsg, this);
+        });
+      }
+      drawActs();
       function draw() {
         var q = debtState.q.toLowerCase(), rs = d.rows.filter(function (r) { return (!debtState.mgr || r.mgr === debtState.mgr) && (!q || (r.client + ' ' + r.num).toLowerCase().indexOf(q) >= 0); });
-        dl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' заказ(ов) · ' + rub(rs.reduce(function (s, r) { return s + r.debt; }, 0)) + '</div><div class="tw" style="max-height:65vh"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Долг</th><th>Отгружено</th><th>Последняя отгрузка</th><th>Дней</th><th>Дата оплаты</th></tr></thead><tbody>' +
-          rs.slice(0, 300).map(function (r) { return '<tr><td class="l">' + esc(r.client) + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.debt) + '</b></td><td>' + rub(r.shipped) + '</td><td>' + dayLabel(r.shipDate) + '</td><td class="' + (r.age > 30 ? 'neg' : '') + '">' + r.age + '</td><td>' + (r.payDate ? dayLabel(r.payDate) + (r.overdue ? ' <span class="neg">+' + r.overdue + ' дн.</span>' : '') : '—') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+        dl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' заказ(ов) · ' + rub(rs.reduce(function (s, r) { return s + r.debt; }, 0)) + '</div><div class="tw" style="max-height:65vh"><table class="t"><thead><tr>' + (STATIC ? '' : '<th></th>') + '<th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Долг</th><th>Отгружено</th><th>Последняя отгрузка</th><th>Дней</th><th>Дата оплаты</th></tr></thead><tbody>' +
+          rs.slice(0, 300).map(function (r) { return '<tr>' + (STATIC ? '' : '<td><input type="checkbox" class="dc" data-num="' + esc(r.num) + '"></td>') + '<td class="l">' + esc(r.client) + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.debt) + '</b></td><td>' + rub(r.shipped) + '</td><td>' + dayLabel(r.shipDate) + '</td><td class="' + (r.age > 30 ? 'neg' : '') + '">' + r.age + '</td><td>' + (r.payDate ? dayLabel(r.payDate) + (r.overdue ? ' <span class="neg">+' + r.overdue + ' дн.</span>' : '') : '—') + '</td></tr>'; }).join('') + '</tbody></table></div>';
       }
-      w.querySelector('#dm').addEventListener('change', function () { debtState.mgr = this.value; draw(); });
+      w.querySelector('#dm').addEventListener('change', function () { debtState.mgr = this.value; draw(); drawActs(); });
       w.querySelector('#dq').addEventListener('input', function () { debtState.q = this.value; draw(); });
       draw();
     }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
@@ -680,12 +852,18 @@
         (m.base ? '<div class="tile"><div class="k">Клиентов на ' + m.base.date.slice(8, 10) + '.' + m.base.date.slice(5, 7) + '</div><div class="v">' + m.base.n + '</div><div class="s">активных ' + pct(m.base.a / m.base.n) + ' · VIP ' + m.base.vip + '</div></div>' : '') +
         '<div class="tile"><div class="k">Своё производство в отгрузках</div><div class="v">' + pct(os.share) + '</div><div class="s">за 12 мес.: ' + pct(o12.share) + '</div></div>' +
         '</div><div class="note">млн ₽. Факт — приход денег по «Менеджеру ОП» (Десант); отгрузки — клиентам, которыми он владеет.</div></div>';
+      var mi = MGRS.indexOf(m.name);
+      html += '<div class="card"><b>Правки в мс</b><div class="row" style="margin-top:8px">' + (STATIC
+        ? '<a class="btn" href="' + botLink('tsl_' + mi) + '" target="_blank" rel="noopener">📝 Задачи по засыпающим без задач</a><a class="btn" href="' + botLink('tdb_' + mi) + '" target="_blank" rel="noopener">📝 Задачи: дожать долги 31–90 дн.</a>'
+        : '<button class="btn" type="button" id="mts">📝 Задачи по засыпающим без задач</button><button class="btn" type="button" id="mtd">📝 Задачи: дожать долги 31–90 дн.</button>') +
+        '</div><div class="note" id="mmsg">' + (STATIC ? 'Через бота: он подготовит правку и пришлёт «Подтвердить».' : 'Каждая правка — с предпросмотром и только после «Подтвердить». Передать клиента — кнопка «→» в списках ниже.') + '</div></div>';
       var max = 0; m.trend.forEach(function (x) { if (x.fact > max) max = x.fact; });
       html += '<div class="grid"><div class="card"><h3>Приход денег по месяцам</h3><div class="tw"><table class="t"><tbody>' + m.trend.slice().reverse().map(function (x) {
         return '<tr><td>' + cap(ymName(x.ym)) + '</td><td class="l" style="width:50%"><div class="bar" style="margin:0;height:8px"><i style="width:' + (max ? x.fact / max * 100 : 0).toFixed(1) + '%"></i></div></td><td>' + mln(x.fact, 2) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' +
         '<div class="card"><h3>Что отгружает: 12 месяцев</h3>' + groupBars(m.products.y12, m.products.cls, m.products.own) + '<h3 style="margin-top:14px">Этот месяц</h3>' + groupBars(m.products.cur, m.products.cls, m.products.own) + '</div></div>';
-      html += '<div class="card"><h3>Лучшие клиенты по своему производству (12 мес.)</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th>Своё, млн</th><th>Всего, млн</th><th>Последняя отгрузка</th></tr></thead><tbody>' +
-        m.topClients.map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td><b>' + mln(c.own12, 2) + '</b></td><td>' + mln(c.all12, 2) + '</td><td>' + dayLabel(c.last) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+      html += '<div class="card"><h3>Лучшие клиенты по своему производству (12 мес.)</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th>Своё, млн</th><th>Всего, млн</th><th>Последняя отгрузка</th>' + (STATIC ? '' : '<th class="l">Передать</th>') + '</tr></thead><tbody>' +
+        m.topClients.map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td><b>' + mln(c.own12, 2) + '</b></td><td>' + mln(c.all12, 2) + '</td><td>' + dayLabel(c.last) + '</td>' +
+          (STATIC ? '' : '<td class="l"><div class="row" style="flex-wrap:nowrap">' + mgrSelect('trs', m.name) + '<button class="btn" type="button" data-tr="' + esc(c.agent) + '" style="min-height:34px;padding:4px 10px">→</button></div></td>') + '</tr>'; }).join('') + '</tbody></table></div></div>';
       html += details('Ожидаемые оплаты до конца месяца · ' + m.expList.length, orderTable(m.expList), m.expList.length > 0 && m.expList.length < 15);
       if (m.lateList.length) html += details('<span class="neg">Обещали, но не пришло · ' + m.lateList.length + '</span>', orderTable(m.lateList, 'Не пришло'), true);
       if (m.nextList.length) html += details('Оплаты 1–15 следующего месяца · ' + m.nextList.length, orderTable(m.nextList), false);
@@ -695,6 +873,12 @@
         m.tasks.list.map(function (t) { return '<tr><td>' + dayLabel(t.due) + '</td><td class="l">' + esc(t.client || '—') + '</td><td class="l small">' + esc(t.desc) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (m.tasks.overdue > m.tasks.list.length ? '<div class="note">Показаны 40 самых старых.</div>' : '') : '<div class="muted">Нет.</div>', false);
       html += details('Засыпающие клиенты · ' + m.sleeping.length, sleepTable(m.sleeping, true), false);
       main.innerHTML = html;
+      if (!STATIC) {
+        var mmsg = document.getElementById('mmsg');
+        bindTransfer(main, mmsg);
+        document.getElementById('mts').addEventListener('click', function () { if (window.confirm('Подготовить задачи по засыпающим клиентам ' + m.name + ' без задач? Запись в мс — после «Подтвердить».')) { propose({ type: 'tasks_sleep', mgr: m.name }, mmsg, this); window.scrollTo(0, 0); } });
+        document.getElementById('mtd').addEventListener('click', function () { if (window.confirm('Подготовить задачи «дожать оплату» по долгам ' + m.name + ' 31–90 дней? Запись в мс — после «Подтвердить».')) { propose({ type: 'tasks_debt', mgr: m.name, minAge: 31, maxAge: 90 }, mmsg, this); window.scrollTo(0, 0); } });
+      }
     }).catch(fail);
   }
 
@@ -702,12 +886,26 @@
   var sleepState = { mgr: '', st: 'all12', noTask: false };
   function sleepTable(rows, noMgr) {
     if (!rows.length) return '<div class="muted">Нет.</div>';
-    return '<div class="tw" style="max-height:70vh"><table class="t"><thead><tr><th class="l">Клиент</th>' + (noMgr ? '' : '<th class="l">Менеджер</th>') + '<th>Последняя отгрузка</th><th>Мес. тишины</th><th>Своё за 24 мес.</th><th>Сопутка</th><th>Задачи</th></tr></thead><tbody>' +
+    var edit = !STATIC;
+    return '<div class="tw" style="max-height:70vh"><table class="t"><thead><tr>' + (edit ? '<th></th>' : '') + '<th class="l">Клиент</th>' + (noMgr ? '' : '<th class="l">Менеджер</th>') + '<th>Последняя отгрузка</th><th>Мес. тишины</th><th>Своё за 24 мес.</th><th>Сопутка</th><th>Задачи</th>' + (edit ? '<th class="l">Передать</th>' : '') + '</tr></thead><tbody>' +
       rows.map(function (r) {
-        return '<tr><td class="l">' + esc(r.client) + '<div class="small muted">' + esc(r.cstate || '') + (r.inn ? ' · ИНН ' + esc(r.inn) : '') + '</div></td>' + (noMgr ? '' : '<td class="l">' + mgrLink(r.mgr) + '</td>') +
-          '<td>' + dayLabel(r.last) + '</td><td>' + num(r.months, 1) + '</td><td><b>' + rub(r.own24) + '</b></td><td class="muted">' + rub(r.sop24) + '</td><td>' + (r.tasks ? r.tasks + (r.nextTask ? '<div class="small muted">до ' + dayLabel(r.nextTask) + '</div>' : '') : '<span class="st bad">нет задач</span>') + '</td></tr>';
+        return '<tr>' + (edit ? '<td><input type="checkbox" class="sc" data-agent="' + esc(r.agent) + '"></td>' : '') + '<td class="l">' + esc(r.client) + '<div class="small muted">' + esc(r.cstate || '') + (r.inn ? ' · ИНН ' + esc(r.inn) : '') + '</div></td>' + (noMgr ? '' : '<td class="l">' + mgrLink(r.mgr) + '</td>') +
+          '<td>' + dayLabel(r.last) + '</td><td>' + num(r.months, 1) + '</td><td><b>' + rub(r.own24) + '</b></td><td class="muted">' + rub(r.sop24) + '</td><td>' + (r.tasks ? r.tasks + (r.nextTask ? '<div class="small muted">до ' + dayLabel(r.nextTask) + '</div>' : '') : '<span class="st bad">нет задач</span>') + '</td>' +
+          (edit ? '<td class="l"><div class="row" style="flex-wrap:nowrap">' + mgrSelect('trs', r.mgr) + '<button class="btn" type="button" data-tr="' + esc(r.agent) + '" style="min-height:34px;padding:4px 10px">→</button></div></td>' : '') + '</tr>';
       }).join('') + '</tbody></table></div>';
   }
+  // общие обработчики: передача клиента (кнопка «→» рядом с выбором менеджера)
+  function bindTransfer(root, msgEl) {
+    root.addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button[data-tr]') : null; if (!b) return;
+      var sel = b.parentNode.querySelector('select'), to = sel && sel.value;
+      if (!to) { sel && sel.focus(); return; }
+      var client = b.closest('tr').querySelector('td.l').firstChild.textContent;
+      if (!window.confirm('Подготовить передачу клиента «' + client + '» менеджеру ' + to + '?\nВместе с дублями по ИНН и открытыми задачами. Запись в мс — только после «Подтвердить».')) return;
+      propose({ type: 'transfer', agent: b.getAttribute('data-tr'), to: to }, msgEl, b);
+    });
+  }
+  function checkedAgents(root) { var out = [], cs = root.querySelectorAll('.sc:checked'); for (var i = 0; i < cs.length; i++) out.push(cs[i].getAttribute('data-agent')); return out; }
   function sleepingWidget(w) {
     w.innerHTML = '<div class="loading">Ищу засыпающих…</div>';
     api('/api/sleeping').then(function (s) {
@@ -719,9 +917,27 @@
       var mgrs = s.byMgr.map(function (m) { return m.name; });
       html += '<div class="card"><div class="row" style="margin-bottom:10px"><select id="sm"><option value="">Все менеджеры</option>' + mgrs.map(function (m) { return '<option' + (m === sleepState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select>' +
         '<div class="seg" id="ss">' + [['all12', '3–12 мес.'], ['s1', 'Засыпает 3–6'], ['s2', 'Уснул 6–12'], ['s3', 'Отвалился > 12']].map(function (x) { return '<button type="button" data-s="' + x[0] + '" class="' + (sleepState.st === x[0] ? 'on' : '') + '">' + x[1] + '</button>'; }).join('') + '</div>' +
-        '<label class="small" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="snt"' + (sleepState.noTask ? ' checked' : '') + '> только без задач</label></div><div id="sl"></div></div>';
+        '<label class="small" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="snt"' + (sleepState.noTask ? ' checked' : '') + '> только без задач</label></div>' +
+        '<div class="row" id="sact" style="margin-bottom:10px"></div><div class="note" id="smsg" style="margin-top:0"></div><div id="sl"></div></div>';
       w.innerHTML = html;
-      var sl = w.querySelector('#sl');
+      var sl = w.querySelector('#sl'), sact = w.querySelector('#sact'), smsg = w.querySelector('#smsg');
+      function drawActs() {
+        var idx = sleepState.mgr ? MGRS.indexOf(sleepState.mgr) : 'all';
+        sact.innerHTML = STATIC
+          ? '<a class="btn pri" href="' + botLink('tsl_' + idx) + '" target="_blank" rel="noopener">📝 Задачи в мс: всем без задач' + (sleepState.mgr ? ' (' + esc(sleepState.mgr) + ')' : '') + '</a><span class="small muted">через бота, с подтверждением</span>'
+          : '<button class="btn pri" type="button" id="sall">📝 Задачи в мс: всем без задач' + (sleepState.mgr ? ' (' + esc(sleepState.mgr) + ')' : '') + '</button><button class="btn" type="button" id="ssel">📝 По отмеченным</button>';
+        if (STATIC) return;
+        sact.querySelector('#sall').addEventListener('click', function () {
+          if (!window.confirm('Подготовить задачи по засыпающим клиентам без задач' + (sleepState.mgr ? ' у ' + sleepState.mgr : ' у всех менеджеров') + ' (3–12 мес. тишины)?\nЗапись в мс — только после «Подтвердить».')) return;
+          propose({ type: 'tasks_sleep', mgr: sleepState.mgr || '' }, smsg, this);
+        });
+        sact.querySelector('#ssel').addEventListener('click', function () {
+          var ag = checkedAgents(sl); if (!ag.length) { smsg.className = 'note err'; smsg.textContent = 'Отметьте клиентов галочкой.'; return; }
+          if (!window.confirm('Подготовить задачи по ' + ag.length + ' отмеченным клиентам? Запись в мс — только после «Подтвердить».')) return;
+          propose({ type: 'tasks_sleep', agents: ag }, smsg, this);
+        });
+      }
+      bindTransfer(sl, smsg);
       function draw() {
         var rs = s.rows.filter(function (r) {
           var okS = sleepState.st === 'all12' ? r.months < 12 : sleepState.st === 's1' ? r.months < 6 : sleepState.st === 's2' ? (r.months >= 6 && r.months < 12) : r.months >= 12;
@@ -729,7 +945,8 @@
         });
         sl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' клиент(ов) · своё производство за 24 мес. ' + rub(rs.reduce(function (a, r) { return a + r.own24; }, 0)) + (rs.length > 300 ? ' · показаны первые 300' : '') + '</div>' + sleepTable(rs.slice(0, 300), false);
       }
-      w.querySelector('#sm').addEventListener('change', function () { sleepState.mgr = this.value; draw(); });
+      w.querySelector('#sm').addEventListener('change', function () { sleepState.mgr = this.value; draw(); drawActs(); });
+      drawActs();
       w.querySelector('#snt').addEventListener('change', function () { sleepState.noTask = this.checked; draw(); });
       w.querySelector('#ss').addEventListener('click', function (e) { var v = e.target.getAttribute('data-s'); if (!v) return; sleepState.st = v; var bs = this.querySelectorAll('button'); for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-s') === v ? 'on' : ''; draw(); });
       draw();
