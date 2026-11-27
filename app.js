@@ -167,8 +167,8 @@
 
   // ---------- файлы ----------
   function filesHtml(groups) {
-    return groups.map(function (g) {
-      return '<div class="card"><h3>' + esc(g.title) + '</h3><ul class="files">' + g.files.map(function (f) {
+    return groups.map(function (g, gi) {
+      return '<div class="card' + (gi ? ' fold' : '') + '"><h3>' + esc(g.title) + ' <span class="small muted">· ' + g.files.length + '</span></h3><ul class="files">' + g.files.map(function (f) {
         return '<li><span class="ext ' + esc(f.ext) + '">' + esc(f.ext) + '</span><div class="fmeta"><a class="fname" href="#view/' + encodeURIComponent(f.id) + '">' + esc(f.name) + '</a>' +
           '<span class="fsub">' + dt(f.mtime) + ' · ' + size(f.size) + '</span></div>' +
           (STATIC ? '<a class="dl" href="#" data-dl="' + esc(f.id) + '">Скачать</a>' : '<a class="dl" href="/api/file?f=' + encodeURIComponent(f.id) + '&dl=1">Скачать</a>') + '</li>';
