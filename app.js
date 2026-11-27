@@ -851,6 +851,40 @@
     }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
   }
 
+  // ---------- передать базу менеджера (уход, перераспределение) ----------
+  function baseTool(box) {
+    if (STATIC) { box.innerHTML = '<div class="card fold"><h3>Передать базу менеджера</h3><div class="note">Готовится на компе (окно «Рабочий стол ОП»), подтверждение — здесь или в Telegram.</div></div>'; return; }
+    var from = '';
+    function draw() {
+      api('/api/basestats' + (from ? '?from=' + encodeURIComponent(from) : '')).then(function (s) {
+        var h = '<div class="card"><h3 style="margin-top:0">Передать базу менеджера</h3><div class="note" style="margin-top:0">Уволился, ушёл в другой отдел или нужно разгрузить — выберите, чью базу, какие группы клиентов и кому. Будет предпросмотр, перевод в мс — только после «Подтвердить». Можно в несколько шагов: например, активных — одному, пассив — другим.</div>' +
+          '<div class="row" style="margin-top:8px"><b>Чью базу:</b><select id="bfrom"><option value="">— выберите —</option>' + s.owners.map(function (o) { return '<option value="' + esc(o.key) + '"' + (o.key === from ? ' selected' : '') + '>' + esc(o.key) + ' · ' + o.n + (o.active ? '' : ' · не в ОП') + '</option>'; }).join('') + '</select></div>';
+        if (s.stats) {
+          h += '<div style="margin-top:10px"><b>Какие клиенты:</b>' + Object.keys(s.cats).map(function (k) { var x = s.stats[k]; return '<label style="display:flex;gap:8px;align-items:center;margin:6px 0"><input type="checkbox" class="bcat" value="' + k + '"' + (x.n ? '' : ' disabled') + '> ' + esc(s.cats[k]) + ' — <b>' + x.n + '</b> <span class="small muted">(A/B: ' + x.ab + (x.own24 ? ', горшков и кассет за 2 года на ' + mln(x.own24, 1) + ' млн' : '') + ')</span></label>'; }).join('') +
+            '<label class="small" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="bab"> только A/B (крупные и средние)</label>' +
+            '<label class="small" style="display:flex;gap:8px;align-items:center;margin-top:4px"><input type="checkbox" id="bdub" checked> дублеры без основной карточки в ОП — тоже раздать (' + s.dubs + ' дублеров всего; у кого основная у менеджера ОП — уйдут к нему)</label></div>' +
+            '<div style="margin-top:10px"><b>Кому:</b><div class="row" style="margin-top:6px">' + s.owners.filter(function (o) { return o.active && o.key !== from; }).map(function (o) { return '<label class="small" style="display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 8px"><input type="checkbox" class="bto" value="' + esc(o.key) + '"> ' + esc(o.key) + ' <span class="muted">· ' + o.n + '</span></label>'; }).join('') + '</div></div>' +
+            '<div class="seg" id="bmode" style="margin-top:10px"><button type="button" data-m="load" class="on">Выравнивать по нагрузке</button><button type="button" data-m="even">Поровну</button></div>' +
+            '<div class="row" style="margin-top:12px"><button class="btn pri" type="button" id="bgo">Подготовить передачу…</button></div><div class="note" id="bmsg"></div>';
+        }
+        h += '</div>';
+        box.innerHTML = h;
+        box.querySelector('#bfrom').addEventListener('change', function () { from = this.value; draw(); });
+        var mode = 'load', mb = box.querySelector('#bmode');
+        if (mb) mb.addEventListener('click', function (e) { var m = e.target.getAttribute('data-m'); if (!m) return; mode = m; var bs = this.querySelectorAll('button'); for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-m') === m ? 'on' : ''; });
+        var go = box.querySelector('#bgo');
+        if (go) go.addEventListener('click', function () {
+          var pick = function (cls) { var r = [], cs = box.querySelectorAll(cls + ':checked'); for (var i = 0; i < cs.length; i++) r.push(cs[i].value); return r; };
+          var cats = pick('.bcat'), to = pick('.bto'), msg = box.querySelector('#bmsg');
+          if (!cats.length || !to.length) { msg.className = 'note err'; msg.textContent = 'Отметьте группы клиентов и кому передать.'; return; }
+          if (!window.confirm('Подготовить передачу базы ' + from + ' → ' + to.join(', ') + '?\nБудет предпросмотр, запись в мс — только после «Подтвердить».')) return;
+          propose({ type: 'base', from: from, cats: cats, to: to, mode: mode, abOnly: box.querySelector('#bab').checked, withDubs: box.querySelector('#bdub').checked }, msg, this);
+        });
+      }).catch(function (e) { box.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+    }
+    draw();
+  }
+
   // ---------- общие кусочки для новых разделов ----------
   function mln(x, d) { return x == null || !isFinite(x) ? '—' : num(x / 1e6, d == null ? 1 : d); }
   function mgrLink(n) { return '<a href="#mgr/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'; }
@@ -1217,6 +1251,7 @@
       }
       w.innerHTML = html;
       bindActions(w.querySelector('#sc'), function () { gradingWidget(w); });
+      var bt = document.createElement('div'); w.insertBefore(bt, w.children[1] || null); baseTool(bt);
     }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
   }
 
