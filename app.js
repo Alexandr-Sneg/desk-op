@@ -24,7 +24,7 @@
   function size(b) { return b > 1048576 ? num(b / 1048576, 1) + ' МБ' : Math.max(1, Math.round(b / 1024)) + ' КБ'; }
   // ---------- зашифрованная копия ----------
   function b64ToBytes(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
-  function bytesToB64(u) { var s = ''; u = new Uint8Array(u); for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]); return btoa(s); }
+  function bytesToB64(u) { var s = ''; u = new Uint8Array(u); for (var i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); }
   function decrypt(buf, key) {
     var u = new Uint8Array(buf);
     return crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.subarray(0, 12) }, key || KEY, u.subarray(12));
@@ -87,6 +87,8 @@
     var one = { '/api/forecast': 'forecastBlob', '/api/debts': 'debtsBlob', '/api/sleeping': 'sleepingBlob' }[p];
     if (one) return D[one] ? blobJson(D[one]) : Promise.resolve({ none: true });
     if (p === '/api/managers') return Promise.resolve(D.managers || []);
+    if (p === '/api/training') return D.trainingBlob ? blobJson(D.trainingBlob) : Promise.reject(new Error('Нет данных обучения'));
+    if (p === '/api/training/answers') { var tb = (D.trainingAnswers || {})[q(url, 'mgr') + '|' + q(url, 'lesson')]; return tb ? blobJson(tb) : Promise.reject(new Error('Нет данных')); }
     if (p === '/api/competitors') return D.competitorsBlob ? blobJson(D.competitorsBlob) : Promise.resolve({ none: true });
     if (p === '/api/actionpreview') { var ab = (D.previewBlobs || {})[q(url, 'id')]; return ab ? blobJson(ab) : Promise.resolve({ error: 'Детали правки есть на компе' }); }
     if (p === '/api/manager') { var mb = (D.managerBlobs || {})[q(url, 'm')]; return mb ? blobJson(mb) : Promise.resolve({ error: 'Нет данных' }); }
@@ -113,7 +115,7 @@
       setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 60000);
     }).catch(function (e) { alert('Не удалось скачать: ' + e.message); });
   }
-  document.addEventListener('click', function (ev) { var a = ev.target.closest ? ev.target.closest('[data-dl]') : null; if (a && STATIC) { ev.preventDefault(); saveFile(a.getAttribute('data-dl')); } });
+  document.addEventListener('click', function (ev) { var fh = ev.target.closest ? ev.target.closest('.card.fold > h3') : null; if (fh) { fh.parentNode.classList.toggle('open'); return; } var a = ev.target.closest ? ev.target.closest('[data-dl]') : null; if (a && STATIC) { ev.preventDefault(); saveFile(a.getAttribute('data-dl')); } });
 
   function api(url, opts) {
     if (STATIC) return staticApi(url);
@@ -134,7 +136,7 @@
 
   // ---------- меню ----------
   var ROUTES = [['home', 'Главная'], ['maneuver', 'Манёвр'], ['fact', 'Выполнение'], ['money', 'Деньги'], ['debts', 'Дебиторка'], ['managers', 'Менеджеры'], ['clients', 'Клиентская база'], ['sleeping', 'Засыпающие'],
-    ['plans', 'Планы'], ['prices', 'Прайсы и конкуренты'], ['training', 'Обучение']];
+    ['plans', 'Планы'], ['prices', 'Прайсы и конкуренты'], ['redaction', 'Редакция'], ['training', 'Обучение']];
   function drawNav(cur) {
     navEl.innerHTML = ROUTES.map(function (r) {
       return '<a href="#' + r[0] + '" class="' + (r[0] === cur ? 'on' : '') + '">' + esc(r[1]) + (r[0] === 'home' && pendingCount ? '<span class="badge">' + pendingCount + '</span>' : '') + '</a>';
@@ -154,6 +156,7 @@
     window.scrollTo(0, 0);
     main.innerHTML = '<div class="loading">Загрузка…</div>';
     if (r === 'view') return viewFile(decodeURIComponent(parts[1] || ''));
+    if (r === 'red') { drawNav('redaction'); return redPage(decodeURIComponent(parts[1] || ''), parts[2]); }
     if (r === 'mgr') { drawNav('managers'); return managerPage(decodeURIComponent(parts[1] || '')); }
     if (r === 'home') return home();
     return section(r);
@@ -254,14 +257,14 @@
       html += '<div class="card"><h2>Ждут подтверждения</h2><div id="acts">' + (acts.length ? acts.map(actionHtml).join('') : '<div class="muted">Сейчас ничего не ждёт подтверждения. Правки в мс готовятся кнопками в разделах (задачи по засыпающим и долгам, передача клиента, цены по конкурентам) — и появляются здесь и в Telegram.</div>') +
         ((h.recent || []).length ? '<details style="margin-top:8px"><summary style="cursor:pointer" class="small">Недавние правки за неделю · ' + h.recent.length + '</summary><div style="margin-top:8px">' + h.recent.map(actionHtml).join('') + '</div></details>' : '') + '</div></div>';
       html += '<div id="homejobs"></div>';
-      html += '<div class="card"><h2>Лента обновлений</h2><ul class="feed">' + feed.slice(0, 40).map(function (e) {
+      html += '<div class="card fold"><h3>Лента обновлений</h3><ul class="feed">' + feed.slice(0, 40).map(function (e) {
         var t = String(e.t || ''), when = t.slice(8, 10) + '.' + t.slice(5, 7) + ' ' + t.slice(11, 16);
         var title = e.file ? '<a href="#view/' + encodeURIComponent(e.file) + '">' + esc(e.title) + '</a>' : esc(e.title);
         return '<li><span class="when">' + esc(when) + '</span><span class="what">' + title + '<span class="tag">' + esc(SECTION_TAG[e.section] || e.section || '') + '</span>' + (e.text ? '<div class="small muted">' + esc(e.text) + '</div>' : '') + '</span></li>';
       }).join('') + '</ul></div>';
       main.innerHTML = html;
       var ab = document.getElementById('acts'); if (ab) bindActions(ab, home);
-      jobButtons(document.getElementById('homejobs'), ['data', 'bot', 'prices', 'comp', 'grad', 'pages'], 'Обновить по запросу');
+      jobButtons(document.getElementById('homejobs'), ['data', 'bot', 'prices', 'comp', 'grad', 'pages'], 'Обновить по запросу', true);
     }).catch(fail);
   }
   function factStatusLine(st) {
@@ -283,12 +286,14 @@
         (s.groups.length ? filesHtml(s.groups) : (s.widget ? '' : '<div class="card muted">Пока пусто.</div>'));
       var w = document.getElementById('widget');
       var sj = { maneuver: ['data'], debts: ['data'], sleeping: ['data'], managers: ['data'], clients: ['grad', 'data'], money: ['data', 'bot'] }[s.id];
-      if (sj) { var jb = document.createElement('div'); main.appendChild(jb); jobButtons(jb, sj, 'Обновить по запросу'); }
+      if (sj) { var jb = document.createElement('div'); main.appendChild(jb); jobButtons(jb, sj, 'Обновить по запросу', true); }
       if (s.widget === 'fact') factWidget(w);
       if (s.widget === 'plans') plansWidget(w);
       if (s.widget === 'grading') gradingWidget(w);
       if (s.widget === 'money') moneyWidget(w);
       if (s.widget === 'pricing') pricingWidget(w);
+      if (s.widget === 'redaction') redactionWidget(w);
+      if (s.widget === 'training') trainingWidget(w);
       if (s.widget === 'forecast') forecastWidget(w);
       if (s.widget === 'debts') debtsWidget(w);
       if (s.widget === 'managers') managersWidget(w);
@@ -318,7 +323,7 @@
       } else html += '<div class="note">На ' + esc(ymName(f.ym)) + ' плана нет — показан только факт.</div>';
       html += '</div>';
       // таблица регионов
-      html += '<div class="card"><h3>Регионы</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th><th>Факт</th>' + vk.map(function (k) { return '<th>' + vn(k) + '</th><th>%</th>'; }).join('') + (f.isCur && vk.length ? '<th>Нужно в день</th>' : '') + '<th>Год назад</th><th>к году</th></tr></thead><tbody>' +
+      html += '<div class="card fold"><h3>Регионы</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th><th>Факт</th>' + vk.map(function (k) { return '<th>' + vn(k) + '</th><th>%</th>'; }).join('') + (f.isCur && vk.length ? '<th>Нужно в день</th>' : '') + '<th>Год назад</th><th>к году</th></tr></thead><tbody>' +
         ['Ц', 'Ю', 'С', 'Б', 'Отдел'].map(function (z) {
           var fa = f.reg[z], ly = f.lyReg ? f.lyReg[z] : null, left = f.wdAll - f.wdDone;
           return '<tr class="' + (z === 'Отдел' ? 'tot' : '') + '"><td>' + ZN[z] + '</td><td>' + num(fa) + '</td>' + vk.map(function (k) { var p = f.plans[k][z]; return '<td>' + (p == null ? '—' : num(p)) + '</td><td>' + (p ? pct(fa / p) : '—') + '</td>'; }).join('') +
@@ -327,12 +332,12 @@
         }).join('') + '</tbody></table></div><div class="note">ю = млн ₽, приход денег (банк + касса), ООО «АМИНАТРЕЙД», без РВБ, Нике/Евростандарт и «Интернет Решений». Регион — по текущему владельцу клиента, как в «Отчёте Десант».' + (f.isCur && vk.length ? ' «Нужно в день» — по ' + (vk.length > 1 ? 'плану 1' : 'плану') + ' на оставшиеся рабочие дни.' : '') + '</div></div>';
       // график
       html += '<div id="prodblock"></div>';
-      html += '<div class="card"><h3>Отдел: накопительно по дням</h3><div id="chart"></div></div>';
+      html += '<div class="card fold"><h3>Отдел: накопительно по дням</h3><div id="chart"></div></div>';
       // менеджеры
       var zones = ['Ц', 'Ю', 'С', 'Б'];
-      html += '<div class="card"><h3>Менеджеры</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Факт</th><th>Доля в регионе</th><th>Год назад</th><th>к году</th></tr></thead><tbody>' +
+      html += '<div class="card fold"><h3>Менеджеры</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Факт</th><th>Доля в регионе</th><th>Год назад</th><th>к году</th></tr></thead><tbody>' +
         zones.map(function (z) {
-          var ms = f.mgrs.filter(function (m) { return m.zone === z; }); if (!ms.length) return '';
+          var ms = f.mgrs.filter(function (m) { return m.zone === z && isMgr(m.name); }); if (!ms.length) return '';
           var tot = ms.reduce(function (s, m) { return s + m.fact; }, 0);
           return '<tr class="grp"><td colspan="5">' + ZN[z] + ' · ' + u(tot) + '</td></tr>' + ms.map(function (m) {
             return '<tr><td>' + esc(m.name) + (m.top ? ' <span class="small muted">топ</span>' : '') + '</td><td>' + num(m.fact, 2) + '</td><td>' + pct(m.share) + '</td><td>' + num(m.ly, 2) + '</td><td class="' + (m.ly && m.fact >= m.ly ? 'pos' : 'neg') + '">' + (m.ly ? (m.fact >= m.ly ? '+' : '') + Math.round((m.fact / m.ly - 1) * 100) + '%' : '—') + '</td></tr>';
@@ -340,13 +345,13 @@
         }).join('') + '</tbody></table></div><div class="note">Менеджер — по полю «Менеджер ОП» в платеже, поэтому суммы по менеджерам могут немного отличаться от суммы региона (там клиент считается по текущему владельцу). Личных планов нет — только факт и доля.</div></div>';
       // история
       if (f.hist.length) {
-        html += '<div class="card"><h3>План/факт по месяцам</h3><div class="tw"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Отдел</th></tr></thead><tbody>' +
+        html += '<div class="card fold"><h3>План/факт по месяцам</h3><div class="tw"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Отдел</th></tr></thead><tbody>' +
           f.hist.map(function (h) {
             var k = Object.keys(h.plans)[0];
             return '<tr><td>' + cap(ymName(h.ym)) + '<div class="small muted">' + vn(k) + '</div></td>' + ['Ц', 'Ю', 'С', 'Отдел'].map(function (z) { var p = h.plans[k][z]; return '<td>' + num(h.fact[z]) + ' / ' + num(p) + '<div class="small">' + pct(h.fact[z] / p) + '</div></td>'; }).join('') + '</tr>';
           }).join('') + '</tbody></table></div><div class="note">факт / план, ю. Для месяцев с двумя вариантами показан план 1.</div></div>';
       }
-      html += '<div class="card"><h3>Приход по месяцам</h3><div class="tw"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Без рег.</th><th>Отдел</th></tr></thead><tbody>' +
+      html += '<div class="card fold"><h3>Приход по месяцам</h3><div class="tw"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Без рег.</th><th>Отдел</th></tr></thead><tbody>' +
         f.byMonth.slice().reverse().map(function (m) { return '<tr><td>' + cap(ymName(m.ym)) + '</td><td>' + num(m['Ц']) + '</td><td>' + num(m['Ю']) + '</td><td>' + num(m['С']) + '</td><td>' + num(m['Б']) + '</td><td><b>' + num(m['Отдел']) + '</b></td></tr>'; }).join('') + '</tbody></table></div></div>';
       w.innerHTML = html;
       productsBlock(document.getElementById('prodblock'), f.ym);
@@ -440,7 +445,7 @@
     var tot = rows.reduce(function (s, r) { return s + val(r); }, 0);
     return '<div class="tw"><table class="t"><thead><tr><th>Регион / менеджер</th><th>Сумма</th><th>Шт.</th><th>Доля</th></tr></thead><tbody>' +
       ['Центр', 'Юг', 'Север'].map(function (zn) { var z = Z[zn]; if (!z) return ''; return '<tr class="grp"><td colspan="4">' + zn + ' · ' + rub(z.s) + '</td></tr>' +
-        Object.keys(z.m).sort(function (a, b) { return z.m[b].s - z.m[a].s; }).map(function (k) { return '<tr><td>' + esc(k) + '</td><td>' + rub(z.m[k].s) + '</td><td>' + z.m[k].n + '</td><td>' + pct(tot ? z.m[k].s / tot : 0) + '</td></tr>'; }).join(''); }).join('') +
+        Object.keys(z.m).filter(isMgr).sort(function (a, b) { return z.m[b].s - z.m[a].s; }).map(function (k) { return '<tr><td>' + esc(k) + '</td><td>' + rub(z.m[k].s) + '</td><td>' + z.m[k].n + '</td><td>' + pct(tot ? z.m[k].s / tot : 0) + '</td></tr>'; }).join(''); }).join('') +
       '<tr class="tot"><td>Итого</td><td>' + rub(tot) + '</td><td>' + rows.length + '</td><td></td></tr></tbody></table></div>';
   }
   function byDayTable(rows, key, val) {
@@ -471,8 +476,8 @@
           '<div class="tiles" style="margin-top:12px"><div class="tile"><div class="k">Ожидается по «Дате оплаты»</div><div class="v">' + rub(tot) + '</div><div class="s">' + ok.length + ' заказ(ов) · ' + dayLabel(a) + (a !== b ? ' – ' + dayLabel(b) : '') + '</div></div>' +
           ['Центр', 'Юг', 'Север'].map(function (z) { var s = ok.filter(function (r) { return r.zone === z; }).reduce(function (x, r) { return x + val(r); }, 0); return '<div class="tile"><div class="k">' + z + '</div><div class="v">' + rub(s) + '</div><div class="s">' + pct(tot ? s / tot : 0) + '</div></div>'; }).join('') + '</div>' +
           (noSum.length ? '<div class="note err">⚠️ Не заполнена «Сумма оплаты»: ' + noSum.length + ' — ' + noSum.map(function (r) { return esc(r.num); }).join(', ') + '</div>' : '') + '</div>';
-        html += '<div class="grid"><div class="card"><h3>По дням</h3>' + byDayTable(ok, 'date', val) + '</div><div class="card"><h3>По регионам и менеджерам</h3>' + byZoneMgr(ok, val) + '</div></div>';
-        html += '<div class="card"><h3>Заказы</h3><div class="tw" style="max-height:70vh"><table class="t"><thead><tr><th>Дата оплаты</th><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Сумма оплаты</th><th>Сумма заказа</th><th>Уже оплачено</th></tr></thead><tbody>' +
+        html += '<div class="grid"><div class="card fold"><h3>По дням</h3>' + byDayTable(ok, 'date', val) + '</div><div class="card fold"><h3>По регионам и менеджерам</h3>' + byZoneMgr(ok, val) + '</div></div>';
+        html += '<div class="card fold"><h3>Заказы</h3><div class="tw" style="max-height:70vh"><table class="t"><thead><tr><th>Дата оплаты</th><th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Сумма оплаты</th><th>Сумма заказа</th><th>Уже оплачено</th></tr></thead><tbody>' +
           ok.slice().sort(function (x, y) { return x.date < y.date ? -1 : x.date > y.date ? 1 : (y.pay || 0) - (x.pay || 0); }).map(function (r) {
             return '<tr><td>' + dayLabel(r.date) + '</td><td class="l">' + esc(r.client || '—') + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.pay) + '</b></td><td>' + rub(r.osum) + '</td><td>' + (r.payed ? rub(r.payed) : '—') + '</td></tr>';
           }).join('') + '</tbody></table></div></div>';
@@ -491,8 +496,8 @@
           '<div class="tiles" style="margin-top:12px"><div class="tile"><div class="k">Поступило</div><div class="v">' + rub(tot2) + '</div><div class="s">' + rows.length + ' платеж(ей) · ' + dayLabel(a2) + (a2 !== b2 ? ' – ' + dayLabel(b2) : '') + '</div></div>' +
           ['Центр', 'Юг', 'Север'].map(function (z) { var s = rows.filter(function (r) { return r.zone === z; }).reduce(function (x, r) { return x + r.sum; }, 0); return '<div class="tile"><div class="k">' + z + '</div><div class="v">' + rub(s) + '</div><div class="s">' + pct(tot2 ? s / tot2 : 0) + '</div></div>'; }).join('') +
           '<div class="tile"><div class="k">Из них касса</div><div class="v">' + rub(cash) + '</div></div></div></div>';
-        html += '<div class="grid"><div class="card"><h3>По дням</h3>' + byDayTable(rows, 'day', v2) + '</div><div class="card"><h3>По регионам и менеджерам</h3>' + byZoneMgr(rows, v2) + '</div></div>';
-        html += '<div class="card"><h3>Крупнейшие плательщики</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Сумма</th><th>Платежей</th></tr></thead><tbody>' +
+        html += '<div class="grid"><div class="card fold"><h3>По дням</h3>' + byDayTable(rows, 'day', v2) + '</div><div class="card fold"><h3>По регионам и менеджерам</h3>' + byZoneMgr(rows, v2) + '</div></div>';
+        html += '<div class="card fold"><h3>Крупнейшие плательщики</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Сумма</th><th>Платежей</th></tr></thead><tbody>' +
           top.map(function (k) { return '<tr><td class="l">' + esc(k) + '</td><td class="l">' + esc(C[k].m) + '</td><td>' + rub(C[k].s) + '</td><td>' + C[k].n + '</td></tr>'; }).join('') + '</tbody></table></div>' +
           '<div class="note">Методика Десанта, как в «Выполнении»: входящие платежи + касса ООО «АМИНАТРЕЙД», без РВБ, Нике/Евростандарт и «Интернет Решений»; менеджер — «Менеджер ОП», регион — по владельцу клиента.</div></div>';
       } else {
@@ -528,10 +533,10 @@
     return j.state === 'ok' ? '<span class="small muted">обновлено ' + when + '</span>' : j.state === 'error' ? '<span class="st bad">ошибка ' + when + '</span>' : '';
   }
   // ids — какие обновления показать; box — куда
-  function jobButtons(box, ids, title) {
+  function jobButtons(box, ids, title, fold) {
     if (!box) return;
     if (STATIC) {
-      box.innerHTML = '<div class="card"><div class="row" style="justify-content:space-between"><b>' + esc(title || 'Обновить') + '</b><span class="small muted">через бота в Telegram</span></div><div class="row" style="margin-top:10px">' +
+      box.innerHTML = '<div class="card' + (fold ? ' fold' : '') + '"><h3>' + esc(title || 'Обновить') + '</h3><div class="row" style="justify-content:space-between"><b></b><span class="small muted">через бота в Telegram</span></div><div class="row" style="margin-top:10px">' +
         ids.map(function (id) { return '<a class="btn" href="' + botLink('upd_' + id) + '" target="_blank" rel="noopener">↻ ' + esc(JOB_TITLES[id]) + '</a>'; }).join('') +
         '</div><div class="note">Откроется бот — нажмите «Start/Запустить». Бот запустит обновление на компе и пришлёт итог; копия для телефона обновится сама.</div></div>';
       return;
@@ -540,7 +545,7 @@
     function draw() {
       api('/api/jobs').then(function (list) {
         var by = {}; list.forEach(function (j) { by[j.id] = j; });
-        box.innerHTML = '<div class="card"><div class="row" style="justify-content:space-between"><b>' + esc(title || 'Обновить') + '</b></div><div style="margin-top:6px">' + ids.map(function (id) {
+        box.innerHTML = '<div class="card' + (fold ? ' fold' : '') + '"><h3>' + esc(title || 'Обновить') + '</h3><div class="row" style="justify-content:space-between"><b></b></div><div style="margin-top:6px">' + ids.map(function (id) {
           var j = by[id] || { id: id, title: JOB_TITLES[id] };
           return '<div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)"><div style="min-width:0"><div>' + esc(j.title) + '</div><div class="small muted">' + esc(j.hint || '') + '</div></div><div class="row">' + jobLine(j) +
             '<button class="btn" type="button" data-job="' + id + '"' + (j.running ? ' disabled' : '') + '>↻ Обновить</button></div></div>';
@@ -652,6 +657,200 @@
     }).catch(function (e) { box.innerHTML = '<div class="err small">' + esc(e.message) + '</div>'; });
   }
 
+  // ---------- «Редакция»: файлы для правки ----------
+  var redState = { sub: 'prices' };
+  var RED_OPS = { prices: [['prices_ms', '💲 Обновить цены по мс', 'Цены в прайсе заменяются текущими из мс (как ежемесячное обновление). Получится новая версия.']],
+    managers: [['clients_inn', '🔎 Сверить клиентов по ИНН с мс', 'По ИНН из файла найду карточки в мс: чей клиент, статус, последняя отгрузка, сколько взял горшков и кассет. Результат — новый файл.']],
+    competitors: [['to_competitors', '📁 В материалы конкурентов', 'Файл появится в «Прайсы и конкуренты» → «Материалы конкурентов».']], other: [] };
+  function redactionWidget(w) {
+    if (STATIC) { w.innerHTML = '<div class="card">Редакция работает на компе — в окне «Рабочий стол ОП»: туда загружаются файлы, там же правятся и обрабатываются.</div>'; return; }
+    w.innerHTML = '<div class="loading">Загружаю…</div>';
+    api('/api/redaction').then(function (r) {
+      var subs = r.subs, docs = r.docs.filter(function (d) { return d.sub === redState.sub; });
+      var html = '<div class="card"><div class="seg" id="rsub">' + Object.keys(subs).map(function (k) { var n = r.docs.filter(function (d) { return d.sub === k; }).length; return '<button type="button" data-s="' + k + '" class="' + (k === redState.sub ? 'on' : '') + '">' + esc(subs[k]) + (n ? ' · ' + n : '') + '</button>'; }).join('') + '</div>' +
+        '<div class="row" style="margin-top:12px"><input type="file" id="rfile" accept=".xlsx,.xlsm,.xls,.csv,.docx,.pdf,.txt,.md" style="max-width:100%"><button class="btn pri" type="button" id="rup">⬆ Загрузить в «' + esc(subs[redState.sub]) + '»</button></div>' +
+        '<div class="note" id="rmsg">Загружаете файл → правите таблицу прямо здесь или запускаете обработку → каждая правка сохраняется новой версией, любую можно вернуть. Оформление и картинки сохраняются (правки вносит Excel).' +
+        (RED_OPS[redState.sub].length ? ' Обработки здесь: ' + RED_OPS[redState.sub].map(function (o) { return o[1]; }).join(', ') + '.' : '') + '</div></div>';
+      html += '<div class="card"><h3>Файлы</h3>' + (docs.length ? '<ul class="files">' + docs.map(function (d) {
+        return '<li><span class="ext ' + esc(d.ext.slice(1)) + '">' + esc(d.ext.slice(1)) + '</span><div class="fmeta"><a class="fname" href="#red/' + esc(d.id) + '">' + esc(d.name) + '</a><span class="fsub">версия ' + d.v + ' · ' + esc(d.updated) + ' · ' + esc(d.note || '') + '</span></div></li>';
+      }).join('') + '</ul>' : '<div class="muted">Пока пусто — загрузите файл.</div>') + '</div>';
+      w.innerHTML = html;
+      w.querySelector('#rsub').addEventListener('click', function (e) { var s = e.target.getAttribute('data-s'); if (s) { redState.sub = s; redactionWidget(w); } });
+      w.querySelector('#rup').addEventListener('click', function () {
+        var f = w.querySelector('#rfile').files[0], msg = w.querySelector('#rmsg'), btn = this;
+        if (!f) { msg.className = 'note err'; msg.textContent = 'Выберите файл.'; return; }
+        if (f.size > 28e6) { msg.className = 'note err'; msg.textContent = 'Файл больше 28 МБ.'; return; }
+        btn.disabled = true; msg.className = 'note'; msg.textContent = '⏳ Загружаю…';
+        var rd = new FileReader();
+        rd.onload = function () {
+          var b64 = bytesToB64(new Uint8Array(rd.result));
+          api('/api/redaction/upload', { json: { sub: redState.sub, name: f.name, b64: b64 }, soft: true }).then(function (x) {
+            btn.disabled = false; msg.className = 'note ' + (x.ok ? '' : 'err'); msg.textContent = x.msg;
+            if (x.ok) location.hash = '#red/' + x.id;
+          });
+        };
+        rd.readAsArrayBuffer(f);
+      });
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+  function redPage(id, ver) {
+    main.innerHTML = '<div class="loading">Открываю…</div>';
+    api('/api/redaction/info?id=' + encodeURIComponent(id)).then(function (m) {
+      var last = m.versions[m.versions.length - 1].v, v = ver ? +ver : last, isLast = v === last, isXl = ['.xlsx', '.xlsm', '.xls', '.csv'].indexOf(m.ext) >= 0;
+      var src = '/api/redaction/file?id=' + encodeURIComponent(id) + '&v=' + v;
+      var ops = (RED_OPS[m.sub] || []).concat([['diff', '⇄ Что изменилось', 'Сравнить последнюю версию с предыдущей.']]);
+      var html = '<div class="viewer-head"><a class="btn" href="#redaction">← Редакция</a><span class="nm">' + esc(m.versions[v - 1] ? (m.versions.filter(function (x) { return x.v === v; })[0].name || m.name) : m.name) + '</span>' +
+        '<select id="rver">' + m.versions.slice().reverse().map(function (x) { return '<option value="' + x.v + '"' + (x.v === v ? ' selected' : '') + '>версия ' + x.v + ' · ' + esc(x.at) + '</option>'; }).join('') + '</select>' +
+        '<a class="btn pri" href="' + src + '&dl=1">Скачать</a></div>';
+      html += '<div class="card"><div class="row">' + ops.map(function (o) { return '<button class="btn" type="button" data-op="' + o[0] + '" title="' + esc(o[2]) + '">' + esc(o[1]) + '</button>'; }).join('') +
+        (!isLast ? '<button class="btn" type="button" data-op="restore">↩ Вернуть эту версию</button>' : '') + '<button class="btn no" type="button" data-op="remove">Убрать</button></div><div class="note" id="rmsg"></div><div id="rres"></div></div>';
+      html += details('История версий · ' + m.versions.length, '<div class="tw"><table class="t"><tbody>' + m.versions.slice().reverse().map(function (x) { return '<tr><td>' + x.v + '</td><td>' + esc(x.at) + '</td><td class="l">' + esc(x.note) + '</td><td><a href="#red/' + esc(id) + '/' + x.v + '">открыть</a></td></tr>'; }).join('') + '</tbody></table></div>', false);
+      html += '<div id="redit"></div>';
+      main.innerHTML = html;
+      main.querySelector('#rver').addEventListener('change', function () { location.hash = '#red/' + id + '/' + this.value; });
+      var msg = main.querySelector('#rmsg'), res = main.querySelector('#rres');
+      main.querySelector('.card .row').addEventListener('click', function (e) {
+        var b = e.target.closest ? e.target.closest('button[data-op]') : null; if (!b) return; var op = b.getAttribute('data-op');
+        if (op === 'remove' && !window.confirm('Убрать файл из Редакции? (уйдёт в корзину Редакции)')) return;
+        if (op === 'prices_ms' && !window.confirm('Обновить цены в этом прайсе по мс? Будет новая версия, старая останется в истории.')) return;
+        b.disabled = true; msg.className = 'note'; msg.textContent = '⏳ Выполняю…'; res.innerHTML = '';
+        api('/api/redaction/process', { json: { id: id, op: op, v: v }, soft: true }).then(function (x) {
+          b.disabled = false; msg.className = 'note ' + (x.ok ? '' : 'err'); msg.textContent = x.msg;
+          if (x.changes && x.changes.length) res.innerHTML = '<div class="tw" style="max-height:50vh;margin-top:8px"><table class="t"><thead><tr><th>Лист</th><th>Ячейка</th><th class="l">Было</th><th class="l">Стало</th></tr></thead><tbody>' + x.changes.map(function (c) { return '<tr><td>' + esc(c.sheet) + '</td><td>' + esc(c.addr) + '</td><td class="l neg">' + esc(c.was) + '</td><td class="l pos">' + esc(c.now) + '</td></tr>'; }).join('') + '</tbody></table></div>';
+          if (x.ok && op === 'remove') location.hash = '#redaction';
+          else if (x.ok && x.id && x.id !== id) setTimeout(function () { location.hash = '#red/' + x.id; }, 1200);
+          else if (x.ok && x.v) setTimeout(function () { redPage(id); }, 1200);
+        });
+      });
+      if (!isXl) { main.querySelector('#redit').innerHTML = '<div class="card">Этот файл правится после скачивания; здесь — хранение версий и обработки.</div>'; return; }
+      loadScript('XLSX', BASE + 'vendor/xlsx.full.min.js').then(function () { return fetch(src, { credentials: 'same-origin' }); }).then(function (r) { return r.arrayBuffer(); }).then(function (buf) {
+        redEditor(main.querySelector('#redit'), id, window.XLSX.read(new Uint8Array(buf), { type: 'array' }), isLast && m.ext !== '.csv');
+      }).catch(function (e) { main.querySelector('#redit').innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+    }).catch(fail);
+  }
+  function redEditor(box, id, wb, editable) {
+    var names = wb.SheetNames.filter(function (n) { return wb.Sheets[n] && wb.Sheets[n]['!ref']; }), cur = 0, ops = [];
+    function colName(c) { var s = ''; c++; while (c > 0) { var m = (c - 1) % 26; s = String.fromCharCode(65 + m) + s; c = Math.floor((c - 1) / 26); } return s; }
+    function draw() {
+      if (ops.length && !window.confirm('Есть несохранённые правки на этом листе — сбросить их?')) return false;
+      ops = [];
+      var ws = wb.Sheets[names[cur]], rg = window.XLSX.utils.decode_range(ws['!ref']);
+      var r1 = rg.s.r, r2 = Math.min(rg.e.r, rg.s.r + 600), c1 = rg.s.c, c2 = Math.min(rg.e.c, rg.s.c + 30);
+      var h = '<div class="card"><div class="sheets">' + names.map(function (n, i) { return '<button type="button" data-i="' + i + '"' + (i === cur ? ' class="on"' : '') + '>' + esc(n) + '</button>'; }).join('') + '</div>' +
+        (editable ? '<div class="row" style="margin-bottom:8px"><button class="btn pri" type="button" id="rsave" disabled>💾 Сохранить правки</button><span class="small muted" id="rcnt">Кликните ячейку, чтобы изменить. ＋ — строка ниже, × — удалить строку.</span></div>' : '<div class="note" style="margin-top:0">Это не последняя версия — только просмотр. Чтобы править, откройте последнюю или верните эту.</div>') +
+        '<div class="xl" style="max-height:72vh"><table class="redt"><thead><tr><th></th>';
+      for (var c = c1; c <= c2; c++) h += '<th>' + colName(c) + '</th>';
+      h += '</tr></thead><tbody>';
+      for (var r = r1; r <= r2; r++) {
+        h += '<tr><th class="rn" data-r="' + (r + 1) + '"><span>' + (r + 1) + '</span>' + (editable ? ' <a href="#" class="rins" title="Вставить строку ниже">＋</a><a href="#" class="rdel" title="Удалить строку">×</a>' : '') + '</th>';
+        for (var c = c1; c <= c2; c++) {
+          var cell = ws[window.XLSX.utils.encode_cell({ r: r, c: c })], txt = cell ? String(cell.w != null ? cell.w : cell.v) : '';
+          h += '<td' + (editable ? ' contenteditable="true"' : '') + ' data-c="' + (c + 1) + '" data-t="' + (cell ? cell.t : '') + '" data-o="' + esc(txt) + '">' + esc(txt) + '</td>';
+        }
+        h += '</tr>';
+      }
+      h += '</tbody></table></div><div class="note">' + (rg.e.r > r2 || rg.e.c > c2 ? 'Показаны первые 600 строк и 30 столбцов. ' : '') + 'Картинки и оформление здесь не видны, но в файле сохраняются: правки вносит Excel. Числа вводите как в Excel (через запятую).</div><div class="note" id="rsmsg"></div></div>';
+      box.innerHTML = h; return true;
+    }
+    function renumber() { var trs = box.querySelectorAll('tbody tr'); for (var i = 0; i < trs.length; i++) { var th = trs[i].firstChild, rr = +trs[0].firstChild.getAttribute('data-r') + i; th.setAttribute('data-r', rr); th.firstChild.textContent = rr; } }
+    function upd() { var b = box.querySelector('#rsave'); if (b) { b.disabled = !ops.length; box.querySelector('#rcnt').textContent = ops.length ? 'Несохранённых правок: ' + ops.length : 'Кликните ячейку, чтобы изменить.'; } }
+    box.addEventListener('click', function (e) {
+      var t = e.target;
+      if (t.closest && t.closest('.sheets button')) { var i = +t.closest('button').getAttribute('data-i'); var keep = cur; cur = i; if (!draw()) cur = keep; return; }
+      if (t.classList && (t.classList.contains('rins') || t.classList.contains('rdel'))) {
+        e.preventDefault(); var tr = t.closest('tr'), r = +tr.firstChild.getAttribute('data-r');
+        if (t.classList.contains('rins')) {
+          var nt = tr.cloneNode(true); var tds = nt.querySelectorAll('td'); for (var k = 0; k < tds.length; k++) { tds[k].textContent = ''; tds[k].setAttribute('data-o', ''); tds[k].setAttribute('data-t', ''); }
+          tr.parentNode.insertBefore(nt, tr.nextSibling); ops.push({ op: 'ins', r: r + 1 });
+        } else { if (!window.confirm('Удалить строку ' + r + '?')) return; tr.parentNode.removeChild(tr); ops.push({ op: 'del', r: r }); }
+        renumber(); upd(); return;
+      }
+      if (t.id === 'rsave') {
+        var note = window.prompt('Коротко, что поменяли (для истории версий):', '') || '';
+        t.disabled = true; var sm = box.querySelector('#rsmsg'); sm.className = 'note'; sm.textContent = '⏳ Excel сохраняет…';
+        api('/api/redaction/edit', { json: { id: id, sheet: names[cur], ops: ops, note: note }, soft: true }).then(function (x) {
+          sm.className = 'note ' + (x.ok ? '' : 'err'); sm.textContent = x.msg; if (x.ok) { ops = []; setTimeout(function () { redPage(id); }, 1000); } else t.disabled = false;
+        });
+      }
+    });
+    box.addEventListener('focusout', function (e) {
+      var td = e.target; if (!td || td.tagName !== 'TD' || !td.isContentEditable) return;
+      var v = td.textContent.replace(/ /g, ' ').trim(), o = td.getAttribute('data-o');
+      if (v === o) return;
+      var t = td.getAttribute('data-t'); var num = /^-?[\d\s]+([.,]\d+)?$/.test(v);
+      ops.push({ op: 'set', r: +td.parentNode.firstChild.getAttribute('data-r'), c: +td.getAttribute('data-c'), v: v, t: (t === 'n' || (!t && num)) && num ? 'n' : 's' });
+      td.setAttribute('data-o', v); td.style.background = 'var(--accent-soft)'; upd();
+    });
+    draw();
+  }
+
+  // ---------- «Обучение»: уроки по блокам, отправка менеджерам, ответы ----------
+  function trainingWidget(w) {
+    w.innerHTML = '<div class="loading">Загружаю…</div>';
+    api('/api/training').then(function (t) {
+      var L = t.lessons, M = t.managers;
+      var nextFor = function (k) { for (var i = 0; i < L.length; i++) { var r = t.results[k][L[i].id]; if (!r || !r.doneAt) return L[i]; } return null; };
+      var html = '<div class="card"><h3 style="margin-top:0">Уроки: ' + L.length + ' по 10–15 минут</h3><div class="note" style="margin-top:0">Урок — страница по ссылке (без пароля), тест — кнопками в боте @ms_alex_bot, нужно 80%. Вы отправляете урок отсюда, ответы видите в таблице ниже и в Telegram.</div>' +
+        '<div class="row" style="margin-top:8px"><a class="btn" href="' + esc(t.site) + '" target="_blank" rel="noopener">📚 Все уроки на сайте</a>' + (STATIC ? '' : '<button class="btn" type="button" id="tpub">⬆ Опубликовать уроки</button>') + '</div><div class="note" id="tpmsg"></div></div>';
+      if (!STATIC) {
+        html += '<div class="card"><h3 style="margin-top:0">Отправить урок</h3><div class="row"><select id="tles">' + t.blocks.map(function (b) { return '<optgroup label="' + esc(b.title) + '">' + L.filter(function (l) { return l.block === b.id; }).map(function (l) { return '<option value="' + l.id + '">' + l.id.replace('_', '.') + ' ' + esc(l.title) + '</option>'; }).join('') + '</optgroup>'; }).join('') + '</select></div>' +
+          '<div class="row" style="margin-top:8px">' + M.map(function (m) { var n = nextFor(m.key); return '<label class="small" style="display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 8px' + (m.connected ? '' : ';opacity:.5') + '"><input type="checkbox" class="tm" value="' + esc(m.key) + '"' + (m.connected ? '' : ' disabled') + '> ' + esc(m.key) + (n ? ' <span class="muted">· след. ' + n.id.replace('_', '.') + '</span>' : ' <span class="pos">· всё пройдено</span>') + '</label>'; }).join('') + '</div>' +
+          '<div class="row" style="margin-top:10px"><button class="btn pri" type="button" id="tsend">📘 Отправить выбранным</button><button class="btn" type="button" id="tnext">Каждому — его следующий урок</button></div><div class="note" id="tsmsg"></div></div>';
+      }
+      // таблица результатов
+      html += '<div class="card"><h3 style="margin-top:0">Результаты</h3><div class="tw" style="max-height:70vh"><table class="t"><thead><tr><th>Менеджер</th>' + L.map(function (l) { return '<th title="' + esc(l.title) + '">' + l.id.replace('_', '.') + '</th>'; }).join('') + '<th>Итог</th></tr></thead><tbody>' +
+        M.map(function (m) {
+          var done = 0, sum = 0, tot = 0;
+          var cells = L.map(function (l) {
+            var r = t.results[m.key][l.id];
+            if (!r) return '<td class="muted">—</td>';
+            if (r.doneAt) { done++; sum += r.score; tot += r.total; var ok = r.score / r.total >= 0.8; return '<td><a href="#" class="tans ' + (ok ? 'pos' : 'neg') + '" data-m="' + esc(m.key) + '" data-l="' + l.id + '" title="' + esc(r.doneAt) + '">' + r.score + '/' + r.total + '</a></td>'; }
+            if (r.startedAt) return '<td class="small" title="начат ' + esc(r.startedAt) + '">⏳ ' + r.answered + '/' + r.total + '</td>';
+            return '<td class="small muted" title="отправлен ' + esc(r.sentAt) + '">📨</td>';
+          }).join('');
+          return '<tr><td>' + esc(m.key) + (m.connected ? '' : ' <span class="small muted">не подключён</span>') + '</td>' + cells + '<td><b>' + done + '/' + L.length + '</b>' + (tot ? ' <span class="small muted">' + Math.round(sum / tot * 100) + '%</span>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div><div class="note">📨 — отправлен, ⏳ — отвечает, 4/4 — пройден (зелёным — зачёт от 80%). Нажмите на результат — увидите ответы.</div><div id="tdet"></div></div>';
+      // подключение
+      html += '<div class="card fold"><h3>Подключение менеджеров к боту</h3><div class="note" style="margin-top:0">Отправьте менеджеру его личную ссылку (в WhatsApp, Telegram). Он откроет её, нажмёт «Старт» — и бот будет присылать ему уроки. Ссылка личная: по ней бот понимает, кто отвечает.</div><div class="tw"><table class="t"><tbody>' +
+        M.map(function (m) { return '<tr><td>' + esc(m.key) + '</td><td class="l">' + (m.connected ? '<span class="pos">✓ подключён</span> <span class="small muted">' + esc(m.tgName) + ' · ' + esc(m.regAt) + '</span>' : '<span class="small">' + esc(m.invite) + '</span>') + '</td>' + (m.connected || STATIC ? '<td></td>' : '<td><button class="btn" type="button" data-copy="' + esc(m.invite) + '" style="min-height:32px;padding:4px 10px">Копировать</button></td>') + '</tr>'; }).join('') + '</tbody></table></div></div>';
+      w.innerHTML = html;
+      w.addEventListener('click', function (e) {
+        var c = e.target.closest ? e.target.closest('[data-copy]') : null;
+        if (c) { var v = c.getAttribute('data-copy'); try { navigator.clipboard.writeText(v).then(function () { c.textContent = 'Скопировано'; }); } catch (x) { window.prompt('Скопируйте ссылку:', v); } return; }
+        var a = e.target.closest ? e.target.closest('a.tans') : null;
+        if (a) { e.preventDefault(); var det = w.querySelector('#tdet'); det.innerHTML = '<div class="loading">…</div>';
+          api('/api/training/answers?mgr=' + encodeURIComponent(a.getAttribute('data-m')) + '&lesson=' + a.getAttribute('data-l')).then(function (x) {
+            det.innerHTML = '<h3>' + esc(a.getAttribute('data-m')) + ' · ' + esc(x.title) + ': ' + x.score + ' из ' + x.total + '</h3><ol>' + x.items.map(function (i) { var ok = i.given === i.correct; return '<li style="margin:6px 0">' + esc(i.q) + '<div class="small ' + (ok ? 'pos' : 'neg') + '">' + (ok ? '✓ ' : '✗ ') + esc(i.given == null ? 'нет ответа' : i.options[i.given]) + (ok ? '' : ' · правильно: ' + esc(i.options[i.correct])) + '</div></li>'; }).join('') + '</ol>' +
+              (STATIC ? '' : '<button class="btn" type="button" id="treset">↺ Разрешить пересдачу</button>');
+            var rb = det.querySelector('#treset'); if (rb) rb.addEventListener('click', function () { api('/api/training/reset', { json: { mgr: a.getAttribute('data-m'), lesson: a.getAttribute('data-l') } }).then(function (r) { det.innerHTML = '<div class="note">' + esc(r.msg) + '</div>'; }); });
+          }); }
+      });
+      if (STATIC) return;
+      w.querySelector('#tpub').addEventListener('click', function () { var b = this, m = w.querySelector('#tpmsg'); b.disabled = true; m.textContent = '⏳ Публикую…'; api('/api/training/publish', { json: {}, soft: true }).then(function (r) { b.disabled = false; m.className = 'note ' + (r.ok ? '' : 'err'); m.textContent = r.msg; }); });
+      var sendTo = function (pairs, btn) {
+        var m = w.querySelector('#tsmsg'); btn.disabled = true; m.textContent = '⏳ Отправляю…';
+        var out = [], i = 0;
+        (function next() {
+          if (i >= pairs.length) { btn.disabled = false; m.textContent = out.join(' '); setTimeout(function () { trainingWidget(w); }, 2500); return; }
+          var p = pairs[i++]; api('/api/training/send', { json: { lesson: p[0], mgrs: p[1] }, soft: true }).then(function (r) { out.push(r.msg); next(); });
+        })();
+      };
+      w.querySelector('#tsend').addEventListener('click', function () {
+        var ms = [], cs = w.querySelectorAll('.tm:checked'); for (var i = 0; i < cs.length; i++) ms.push(cs[i].value);
+        if (!ms.length) { w.querySelector('#tsmsg').textContent = 'Отметьте менеджеров (подключённых к боту).'; return; }
+        var l = w.querySelector('#tles').value; if (!window.confirm('Отправить урок ' + l.replace('_', '.') + ': ' + ms.join(', ') + '?')) return;
+        sendTo([[l, ms]], this);
+      });
+      w.querySelector('#tnext').addEventListener('click', function () {
+        var by = {}; M.forEach(function (m) { if (!m.connected) return; var n = nextFor(m.key); if (n) (by[n.id] = by[n.id] || []).push(m.key); });
+        var pairs = Object.keys(by).map(function (k) { return [k, by[k]]; });
+        if (!pairs.length) { w.querySelector('#tsmsg').textContent = 'Нет подключённых менеджеров с непройденными уроками.'; return; }
+        if (!window.confirm('Отправить каждому подключённому его следующий урок?\n' + pairs.map(function (p) { return p[0].replace('_', '.') + ': ' + p[1].join(', '); }).join('\n'))) return;
+        sendTo(pairs, this);
+      });
+    }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
+  }
+
   // ---------- общие кусочки для новых разделов ----------
   function mln(x, d) { return x == null || !isFinite(x) ? '—' : num(x / 1e6, d == null ? 1 : d); }
   function mgrLink(n) { return '<a href="#mgr/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'; }
@@ -694,7 +893,7 @@
         '<div class="tile"><div class="k">Горшки и кассеты</div><div class="v">' + mln(cur.own) + '</div><div class="s">' + pct(cur.share) + ' отгрузок' + (ly ? ' · год назад ' + mln(ly.own) + (ly.own ? ' (' + (cur.own >= ly.own ? '+' : '') + Math.round((cur.own / ly.own - 1) * 100) + '%)' : '') : '') + '</div></div>' +
         '<div class="tile"><div class="k">Сопутка</div><div class="v" style="color:var(--text-2)">' + mln(cur.sop) + '</div><div class="s">' + pct(cur.all ? cur.sop / cur.all : 0) + (ly ? ' · год назад ' + mln(ly.sop) : '') + '</div></div></div>' +
         groupBars(p.cur.tot, p.cls, p.own) + '<div class="note">Отгрузки клиентам ОП РФ (все юрлица), млн ₽. ' + (p.ym === p.months[p.months.length - 1] ? 'Месяц ещё идёт.' : '') + '</div></div>' +
-        '<div class="card"><h3>Своё производство по менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Своё, млн</th><th>Доля своего</th><th>Сопутка, млн</th></tr></thead><tbody>' +
+        '<div class="card fold"><h3>Своё производство по менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Своё, млн</th><th>Доля своего</th><th>Сопутка, млн</th></tr></thead><tbody>' +
         mg.map(function (s) { return '<tr><td>' + mgrLink(s.name) + '</td><td><b>' + mln(s.own, 2) + '</b></td><td class="' + (s.share < 0.7 ? 'neg' : '') + '">' + pct(s.share) + '</td><td class="muted">' + mln(s.sop, 2) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
         '<h3 style="margin-top:14px">13 месяцев</h3><div class="tw"><table class="t"><tbody>' + p.trend.slice().reverse().map(function (t) {
           var tot = t.own + t.sop + t.order;
@@ -731,18 +930,18 @@
         }).join('') + '</tbody></table></div>' +
         '<div class="note"><b>Прогноз по датам оплаты</b> = факт + заказы с «Датой оплаты» до конца месяца (не больше неоплаченного остатка заказа). <b>По прошлым месяцам</b> — сколько обычно приходит в оставшиеся дни (медиана за 12 месяцев). <b>По темпу</b> — нынешний темп в день × все рабочие дни. Если «по прошлым месяцам» заметно выше «по датам» — у менеджеров не проставлены даты оплаты, деньги придут «без предупреждения» или их надо дожимать. Всё в ю (млн ₽), методика Десанта.</div></div>';
       // кто может закрыть разрыв
-      html += '<div class="card"><h3>Где взять недостающее: резерв по менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Факт</th><th>Ожидается до конца мес.</th><th>Обещали, не пришло</th><th>Оплаты 1–15 след. мес.</th><th>Долги</th></tr></thead><tbody>' +
+      html += '<div class="card fold"><h3>Где взять недостающее: резерв по менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Факт</th><th>Ожидается до конца мес.</th><th>Обещали, не пришло</th><th>Оплаты 1–15 след. мес.</th><th>Долги</th></tr></thead><tbody>' +
         ['Ц', 'Ю', 'С'].map(function (z) {
-          var ms = f.mgrs.filter(function (m) { return m.zone === z; }); if (!ms.length) return '';
+          var ms = f.mgrs.filter(function (m) { return m.zone === z && isMgr(m.name); }); if (!ms.length) return '';
           return '<tr class="grp"><td colspan="6">' + ZN[z] + '</td></tr>' + ms.map(function (m) {
             return '<tr><td>' + mgrLink(m.name) + (m.top ? ' <span class="small muted">топ</span>' : '') + '</td><td>' + mln(m.fact, 2) + '</td><td>' + mln(m.exp, 2) + (m.expN ? ' <span class="small muted">(' + m.expN + ')</span>' : '') + '</td><td>' + (m.late ? '<span class="neg">' + mln(m.late, 2) + '</span>' : '—') + '</td><td>' + (m.nextEarly ? mln(m.nextEarly, 2) : '—') + '</td><td>' + (m.debt ? mln(m.debt, 2) : '—') + '</td></tr>';
           }).join('');
         }).join('') + '</tbody></table></div><div class="note">«Оплаты 1–15 след. месяца» — заказы, которые можно попробовать перенести в этот месяц. «Долги» — отгружено, но не оплачено (подробно — раздел «Дебиторка»). млн ₽.</div></div>';
       // товарные группы месяца
       var os = ownShare(f.products.tot, f.products.own);
-      html += '<div class="grid"><div class="card"><h3>Что отгружаем в ' + MONTHS[+f.ym.slice(5) - 1].replace(/ь$/, 'е').replace(/й$/, 'е').replace(/т$/, 'те') + '</h3>' + groupBars(f.products.tot, f.products.cls, f.products.own) +
+      html += '<div class="grid"><div class="card fold"><h3>Что отгружаем в ' + MONTHS[+f.ym.slice(5) - 1].replace(/ь$/, 'е').replace(/й$/, 'е').replace(/т$/, 'те') + '</h3>' + groupBars(f.products.tot, f.products.cls, f.products.own) +
         '<div class="note">Отгрузки клиентам ОП РФ по всем юрлицам, млн ₽. Своё производство — ' + pct(os.share) + ' отгрузок.</div></div>' +
-        '<div class="card"><h3>Своё производство по регионам</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th><th>Своё, млн</th><th>Доля своего</th><th>Сопутка, млн</th></tr></thead><tbody>' +
+        '<div class="card fold"><h3>Своё производство по регионам</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th><th>Своё, млн</th><th>Доля своего</th><th>Сопутка, млн</th></tr></thead><tbody>' +
         ['Ц', 'Ю', 'С'].map(function (z) { var s = ownShare(f.products.byZone[z], f.products.own); return '<tr><td>' + ZN[z] + '</td><td>' + mln(s.own, 1) + '</td><td>' + pct(s.share) + '</td><td class="muted">' + mln(s.sop, 1) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
         (f.next && f.next.plans ? '<h3 style="margin-top:16px">' + cap(ymName(f.next.ym)) + ' — задел</h3><div class="note" style="margin-top:0">План: ' + Object.keys(f.next.plans).map(function (k) { return vn(k) + ' ' + num(f.next.plans[k]['Отдел']) + ' ю'; }).join(' · ') + '. Уже стоят даты оплаты на <b>' + mln(f.next.exp) + ' ю</b>.</div>' : '') + '</div></div>';
       // списки
@@ -755,66 +954,72 @@
   }
 
   // ---------- «Дебиторка» ----------
-  var debtState = { mgr: '', q: '' };
+  var debtState = { mgr: '', q: '', kind: 'debt' };
   function debtsWidget(w) {
-    w.innerHTML = '<div class="loading">Считаю долги…</div>';
+    w.innerHTML = '<div class="loading">Считаю…</div>';
     api('/api/debts').then(function (d) {
-      if (d.none || d.total == null) { w.innerHTML = '<div class="card">Данных пока нет — идёт первая выгрузка заказов из мс.</div>'; return; }
+      if (d.none || d.total == null) { w.innerHTML = '<div class="card">Данных пока нет — идёт выгрузка заказов из мс.</div>'; return; }
       var old30 = d.totalB[2] + d.totalB[3] + d.totalB[4];
       var html = '<div class="card"><div class="tiles">' +
-        '<div class="tile"><div class="k">Отгружено, не оплачено</div><div class="v">' + rub(d.total) + '</div><div class="s">' + d.n + ' заказ(ов)</div></div>' +
-        '<div class="tile"><div class="k">Старше 30 дней</div><div class="v ' + (old30 ? 'neg' : '') + '">' + rub(old30) + '</div><div class="s">' + pct(d.total ? old30 / d.total : 0) + '</div></div>' +
-        '<div class="tile"><div class="k">Старше 90 дней</div><div class="v ' + (d.totalB[4] ? 'neg' : '') + '">' + rub(d.totalB[4]) + '</div><div class="s">проверить: долг или не привязана оплата</div></div>' +
-        '<div class="tile"><div class="k">Прошла «Дата оплаты»</div><div class="v">' + rub(d.overdue) + '</div></div>' +
-        '<div class="tile"><div class="k">Авансы: оплачено, не отгружено</div><div class="v">' + rub(d.prepay) + '</div><div class="s">' + d.prepayN + ' заказ(ов) — в очередь на отгрузку</div></div>' +
-        '</div><div class="note">Долг по заказу = отгружено − оплачено (по данным заказа в мс). Давность — от последней отгрузки по заказу. ООО «АМИНАТРЕЙД», менеджер — «Менеджер ОП», регион — по владельцу клиента. ' + updLine(d.status, 'Данные мс на') + '</div></div>';
-      html += '<div class="card"><h3>По давности</h3><div class="tw"><table class="t"><thead><tr><th>Регион</th>' + d.buckets.map(function (b) { return '<th>' + b + '</th>'; }).join('') + '<th>Итого</th></tr></thead><tbody>' +
-        d.byZone.map(function (z) { return '<tr><td>' + esc(z.name) + '</td>' + z.b.map(function (v, i) { return '<td class="' + (i >= 2 && v ? 'neg' : '') + '">' + (v ? mln(v, 2) : '—') + '</td>'; }).join('') + '<td><b>' + mln(z.total, 2) + '</b></td></tr>'; }).join('') +
-        '<tr class="tot"><td>Всего</td>' + d.totalB.map(function (v) { return '<td>' + mln(v, 2) + '</td>'; }).join('') + '<td>' + mln(d.total, 2) + '</td></tr></tbody></table></div><div class="note">млн ₽</div></div>';
-      html += '<div class="card"><h3>По менеджерам</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th>' + d.buckets.map(function (b) { return '<th>' + b + '</th>'; }).join('') + '<th>Итого</th><th>Заказов</th></tr></thead><tbody>' +
-        d.byMgr.map(function (m) { return '<tr><td>' + mName(m.name) + '</td>' + m.b.map(function (v, i) { return '<td class="' + (i >= 2 && v ? 'neg' : '') + '">' + (v ? mln(v, 2) : '—') + '</td>'; }).join('') + '<td><b>' + mln(m.total, 2) + '</b></td><td>' + m.n + '</td></tr>'; }).join('') +
-        '</tbody></table></div><div class="note">«не в ОП» — заказы, где в «Менеджере ОП» указан сотрудник не из текущего состава отдела (бывшие менеджеры, стажёр, РОП). Их долги никто не ведёт — стоит переназначить.</div></div>';
-      html += '<div class="card"><h3>Крупнейшие должники</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th class="l">Менеджер</th><th>Долг</th><th>Заказов</th><th>Самый старый, дн.</th></tr></thead><tbody>' +
-        d.clients.slice(0, 30).map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td class="l">' + esc(c.mgr) + '</td><td><b>' + rub(c.total) + '</b></td><td>' + c.n + '</td><td class="' + (c.maxAge > 30 ? 'neg' : '') + '">' + c.maxAge + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
-      var mgrs = []; d.rows.forEach(function (r) { if (mgrs.indexOf(r.mgr) < 0) mgrs.push(r.mgr); }); mgrs.sort();
-      html += '<div class="card"><h3>Заказы с долгом</h3><div class="row" style="margin-bottom:10px"><select id="dm"><option value="">Все менеджеры</option>' + mgrs.map(function (m) { return '<option' + (m === debtState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select><input type="search" id="dq" placeholder="Клиент или № заказа" value="' + esc(debtState.q) + '" style="flex:1;min-width:0"></div>' +
+        '<div class="tile"><div class="k">Отгружено без оплаты</div><div class="v ' + (old30 ? 'neg' : '') + '">' + mln(d.total, 1) + ' млн</div><div class="s">' + d.n + ' заказ(ов) · старше 30 дн. ' + mln(old30, 1) + '</div></div>' +
+        '<div class="tile"><div class="k">Резерв без оплаты</div><div class="v">' + mln(d.reserveTotal, 1) + ' млн</div><div class="s">товар отложен, денег нет</div></div>' +
+        '<div class="tile"><div class="k">Подтверждено, ждёт оплаты</div><div class="v">' + mln(d.waitTotal - d.reserveTotal, 1) + ' млн</div></div>' +
+        '<div class="tile"><div class="k">Авансы: оплачено, не отгружено</div><div class="v">' + mln(d.prepay, 1) + ' млн</div><div class="s">' + d.prepayN + ' заказ(ов)</div></div>' +
+        '</div><div class="note">Долг — только в статусах «' + d.rules.debt.join('», «') + '». «Выполнен», «Закрыть по отгрузке» и отменённые не считаются (там расхождения мс). Заказы неработающих менеджеров — на текущем владельце клиента. ' + updLine(d.status, 'Данные мс на') + '</div></div>';
+      html += details('Разбивка по статусам заказов', '<div class="tw"><table class="t"><thead><tr><th class="l">Статус</th><th>Заказов</th><th>Сумма</th><th>Оплачено</th><th>Отгружено</th><th>Отгружено без оплаты</th><th>Не оплачено всего</th></tr></thead><tbody>' +
+        d.statuses.map(function (x) { return '<tr' + (x.live ? '' : ' class="muted"') + '><td class="l">' + (x.debt ? '<b>' + esc(x.name) + '</b> <span class="st warn">долг</span>' : x.live ? esc(x.name) + ' <span class="st idle">ждёт оплаты</span>' : esc(x.name)) + '</td><td>' + x.n + '</td><td>' + mln(x.sum, 2) + '</td><td>' + mln(x.payed, 2) + '</td><td>' + mln(x.shipped, 2) + '</td><td>' + mln(x.unpaidShipped, 2) + '</td><td>' + mln(x.unpaid, 2) + '</td></tr>'; }).join('') +
+        '</tbody></table></div><div class="note">Незавершённые заказы, млн ₽. Серым — статусы, которые в долги не идут.</div>', false);
+      var wm = {}; (d.waitByMgr || []).forEach(function (x) { wm[x.name] = x; });
+      var bm = {}; d.byMgr.forEach(function (m) { bm[m.name] = m; });
+      var names = MGRS.filter(function (n) { return bm[n] || wm[n]; });
+      html += details('По менеджерам', '<div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Отгружено без оплаты</th><th>из них старше 30 дн.</th><th>Резерв без оплаты</th><th>Подтверждено, ждёт оплаты</th></tr></thead><tbody>' +
+        names.map(function (n) { var m = bm[n] || { total: 0, b: [0, 0, 0, 0, 0] }, x = wm[n] || { reserve: 0, confirmed: 0 }; var o30 = m.b[2] + m.b[3] + m.b[4];
+          return '<tr><td>' + mgrLink(n) + '</td><td><b>' + (m.total ? mln(m.total, 2) : '—') + '</b></td><td class="' + (o30 ? 'neg' : '') + '">' + (o30 ? mln(o30, 2) : '—') + '</td><td>' + (x.reserve ? mln(x.reserve, 2) : '—') + '</td><td>' + (x.confirmed ? mln(x.confirmed, 2) : '—') + '</td></tr>'; }).join('') +
+        '</tbody></table></div><div class="note">млн ₽, только работающие менеджеры ОП.</div>', false);
+      html += '<div class="card"><h3>Заказы</h3><div class="seg" id="dk" style="margin-bottom:8px"><button type="button" data-k="debt" class="' + (debtState.kind !== 'wait' ? 'on' : '') + '">Отгружено без оплаты · ' + d.rows.length + '</button><button type="button" data-k="wait" class="' + (debtState.kind === 'wait' ? 'on' : '') + '">Ждут оплаты · ' + d.waits.length + '</button></div>' +
+        '<div class="row" style="margin-bottom:10px"><select id="dm"><option value="">Все менеджеры</option>' + MGRS.map(function (m) { return '<option' + (m === debtState.mgr ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select><input type="search" id="dq" placeholder="Клиент или № заказа" value="' + esc(debtState.q) + '" style="flex:1;min-width:0"></div>' +
         '<div class="row" id="dact" style="margin-bottom:10px"></div><div class="note" id="dmsg" style="margin-top:0"></div><div id="dl"></div></div>';
       w.innerHTML = html;
       var dl = w.querySelector('#dl'), dact = w.querySelector('#dact'), dmsg = w.querySelector('#dmsg');
       function drawActs() {
-        var mg = debtState.mgr && isMgr(debtState.mgr) ? debtState.mgr : '';
-        var idx = mg ? MGRS.indexOf(mg) : 'all';
+        if (debtState.kind === 'wait') { dact.innerHTML = ''; return; }
+        var mg = debtState.mgr, idx = mg ? MGRS.indexOf(mg) : 'all';
         dact.innerHTML = STATIC
-          ? '<a class="btn pri" href="' + botLink('tdb_' + idx) + '" target="_blank" rel="noopener">📝 Задачи в мс: дожать долги 31–90 дн.' + (mg ? ' (' + esc(mg) + ')' : '') + '</a><span class="small muted">через бота, с подтверждением</span>'
-          : '<button class="btn pri" type="button" id="dall">📝 Задачи: дожать долги 31–90 дн.' + (debtState.mgr ? ' (' + esc(debtState.mgr) + ')' : '') + '</button><button class="btn" type="button" id="dold">📝 Задачи: сверить долги старше 90 дн.</button><button class="btn" type="button" id="dsel">📝 По отмеченным заказам</button>';
+          ? '<a class="btn pri" href="' + botLink('tdb_' + idx) + '" target="_blank" rel="noopener">📝 Задачи: дожать 31–90 дн.' + (mg ? ' (' + esc(mg) + ')' : '') + '</a>'
+          : '<button class="btn pri" type="button" id="dall">📝 Задачи: дожать 31–90 дн.' + (mg ? ' (' + esc(mg) + ')' : '') + '</button><button class="btn" type="button" id="dold">📝 Сверить старше 90 дн.</button><button class="btn" type="button" id="dsel">📝 По отмеченным</button>';
         if (STATIC) return;
-        dact.querySelector('#dall').addEventListener('click', function () {
-          if (!window.confirm('Подготовить задачи «дожать оплату» по долгам 31–90 дней' + (debtState.mgr ? ' (' + debtState.mgr + ')' : '') + '?\nЗаказы бывших менеджеров — текущему владельцу клиента. Запись в мс — только после «Подтвердить».')) return;
-          propose({ type: 'tasks_debt', mgr: debtState.mgr || '', minAge: 31, maxAge: 90 }, dmsg, this);
-        });
-        dact.querySelector('#dold').addEventListener('click', function () {
-          if (!window.confirm('Подготовить задачи «сверить долг» по заказам с долгом старше 90 дней' + (debtState.mgr ? ' (' + debtState.mgr + ')' : '') + '?\nВ задаче: если оплачено — привязать платёж к заказу, если нет — дожать. Запись в мс — только после «Подтвердить».')) return;
-          propose({ type: 'tasks_debt', mgr: debtState.mgr || '', minAge: 91 }, dmsg, this);
-        });
+        dact.querySelector('#dall').addEventListener('click', function () { if (window.confirm('Подготовить задачи «дожать оплату» по долгам 31–90 дней' + (mg ? ' (' + mg + ')' : '') + '? Запись в мс — после «Подтвердить».')) propose({ type: 'tasks_debt', mgr: mg || '', minAge: 31, maxAge: 90 }, dmsg, this); });
+        dact.querySelector('#dold').addEventListener('click', function () { if (window.confirm('Подготовить задачи «сверить долг» по долгам старше 90 дней' + (mg ? ' (' + mg + ')' : '') + '? Запись в мс — после «Подтвердить».')) propose({ type: 'tasks_debt', mgr: mg || '', minAge: 91 }, dmsg, this); });
         dact.querySelector('#dsel').addEventListener('click', function () {
           var cs = dl.querySelectorAll('.dc:checked'), nums = []; for (var i = 0; i < cs.length; i++) nums.push(cs[i].getAttribute('data-num'));
           if (!nums.length) { dmsg.className = 'note err'; dmsg.textContent = 'Отметьте заказы галочкой.'; return; }
-          if (!window.confirm('Подготовить задачи по ' + nums.length + ' заказам? Запись в мс — только после «Подтвердить».')) return;
-          propose({ type: 'tasks_debt', nums: nums }, dmsg, this);
+          if (window.confirm('Подготовить задачи по ' + nums.length + ' заказам? Запись в мс — после «Подтвердить».')) propose({ type: 'tasks_debt', nums: nums }, dmsg, this);
         });
       }
-      drawActs();
       function draw() {
-        var q = debtState.q.toLowerCase(), rs = d.rows.filter(function (r) { return (!debtState.mgr || r.mgr === debtState.mgr) && (!q || (r.client + ' ' + r.num).toLowerCase().indexOf(q) >= 0); });
-        dl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' заказ(ов) · ' + rub(rs.reduce(function (s, r) { return s + r.debt; }, 0)) + '</div><div class="tw" style="max-height:65vh"><table class="t"><thead><tr>' + (STATIC ? '' : '<th></th>') + '<th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th>Долг</th><th>Отгружено</th><th>Последняя отгрузка</th><th>Дней</th><th>Дата оплаты</th></tr></thead><tbody>' +
-          rs.slice(0, 300).map(function (r) { return '<tr>' + (STATIC ? '' : '<td><input type="checkbox" class="dc" data-num="' + esc(r.num) + '"></td>') + '<td class="l">' + esc(r.client) + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td><b>' + rub(r.debt) + '</b></td><td>' + rub(r.shipped) + '</td><td>' + dayLabel(r.shipDate) + '</td><td class="' + (r.age > 30 ? 'neg' : '') + '">' + r.age + '</td><td>' + (r.payDate ? dayLabel(r.payDate) + (r.overdue ? ' <span class="neg">+' + r.overdue + ' дн.</span>' : '') : '—') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+        var q = debtState.q.toLowerCase(), wait = debtState.kind === 'wait', src = wait ? d.waits : d.rows;
+        var rs = src.filter(function (r) { return (!debtState.mgr || r.mgr === debtState.mgr) && (!q || (r.client + ' ' + r.num).toLowerCase().indexOf(q) >= 0); });
+        var tot = rs.reduce(function (s, r) { return s + (wait ? r.wait : r.debt); }, 0);
+        dl.innerHTML = '<div class="small muted" style="margin-bottom:6px">' + rs.length + ' заказ(ов) · ' + rub(tot) + '</div><div class="tw" style="max-height:65vh"><table class="t"><thead><tr>' + (STATIC || wait ? '' : '<th></th>') + '<th class="l">Клиент</th><th class="l">Менеджер</th><th>Заказ</th><th class="l">Статус</th>' +
+          (wait ? '<th>Сумма</th><th>Оплачено</th><th>Ждём</th><th>Дата заказа</th><th>Дата оплаты</th>' : '<th>Долг</th><th>Отгружено</th><th>Дней с отгрузки</th><th>Дата оплаты</th>') + '</tr></thead><tbody>' +
+          rs.slice(0, 300).map(function (r) {
+            return '<tr>' + (STATIC || wait ? '' : '<td><input type="checkbox" class="dc" data-num="' + esc(r.num) + '"></td>') + '<td class="l">' + esc(r.client) + '</td><td class="l">' + esc(r.mgr) + '</td><td>' + esc(r.num) + '</td><td class="l small">' + esc(r.st) + '</td>' +
+              (wait ? '<td>' + rub(r.sum) + '</td><td>' + (r.payed ? rub(r.payed) : '—') + '</td><td><b>' + rub(r.wait) + '</b></td><td>' + dayLabel(r.date) + '</td><td>' + (r.payDate ? dayLabel(r.payDate) : '—') + '</td>'
+                : '<td><b>' + rub(r.debt) + '</b></td><td>' + rub(r.shipped) + '</td><td class="' + (r.age > 30 ? 'neg' : '') + '">' + r.age + '</td><td>' + (r.payDate ? dayLabel(r.payDate) + (r.overdue ? ' <span class="neg">+' + r.overdue + ' дн.</span>' : '') : '—') + '</td>') + '</tr>';
+          }).join('') + '</tbody></table></div>';
       }
+      w.querySelector('#dk').addEventListener('click', function (e) { var k = e.target.getAttribute('data-k'); if (!k) return; debtState.kind = k; var bs = this.querySelectorAll('button'); for (var i = 0; i < bs.length; i++) bs[i].className = bs[i].getAttribute('data-k') === k ? 'on' : ''; draw(); drawActs(); });
       w.querySelector('#dm').addEventListener('change', function () { debtState.mgr = this.value; draw(); drawActs(); });
       w.querySelector('#dq').addEventListener('input', function () { debtState.q = this.value; draw(); });
-      draw();
+      drawActs(); draw();
     }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
   }
 
+  function insightList(ins) {
+    if (!ins.length) return '';
+    var ic = { bad: '🔴', warn: '🟡', good: '🟢' };
+    return '<ul style="list-style:none;margin:8px 0 0;padding:0">' + ins.map(function (i) { return '<li style="margin:6px 0;display:flex;gap:8px"><span>' + ic[i.lvl] + '</span><span>' + esc(i.text) + '</span></li>'; }).join('') + '</ul>';
+  }
   // ---------- «Менеджеры»: список и карточка ----------
   function managersWidget(w) {
     w.innerHTML = '<div class="loading">Загружаю…</div>';
@@ -833,7 +1038,7 @@
             '<div class="tile"><div class="k">Ожидается</div><div class="v" style="font-size:19px">' + mln(a.exp, 2) + '</div></div>' +
             '<div class="tile"><div class="k">Долги</div><div class="v" style="font-size:19px">' + mln(b.total, 2) + '</div></div>' +
             '<div class="tile"><div class="k">Засыпают / без задач</div><div class="v" style="font-size:19px">' + ((c.s1 || 0) + (c.s2 || 0)) + ' / <span class="' + (c.noTask ? 'neg' : '') + '">' + (c.noTask || 0) + '</span></div></div>' +
-            '</div><div class="note">млн ₽ · открыть карточку →</div></a>';
+            '</div>' + insightList(m.insights || []) + '<div class="note">млн ₽ · подробнее в карточке →</div></a>';
         }).join('');
       }).join('') + '</div>';
     }).catch(function (e) { w.innerHTML = '<div class="card err">' + esc(e.message) + '</div>'; });
@@ -844,6 +1049,8 @@
       if (m.error) { main.innerHTML = '<div class="card">' + esc(m.error) + '</div>'; return; }
       var os = ownShare(m.products.cur, m.products.own), o12 = ownShare(m.products.y12, m.products.own);
       var html = '<div class="viewer-head"><a class="btn" href="#managers">← Менеджеры</a><span class="nm" style="font-size:18px">' + esc(m.name) + ' <span class="small muted">' + esc(m.zone) + (m.top ? ' · топ' : '') + '</span></span></div>';
+      html += '<div class="card"><h3>На что обратить внимание</h3>' + insightList(m.insights || []) +
+        (m.questions && m.questions.length ? '<h3 style="margin-top:14px">Вопросы на планёрку</h3><ol style="margin:0;padding-left:20px">' + m.questions.map(function (q) { return '<li style="margin:4px 0">' + esc(q) + '</li>'; }).join('') + '</ol>' : '') + '</div>';
       html += '<div class="card"><div class="tiles">' +
         '<div class="tile"><div class="k">Факт ' + MONTHS[+m.ym.slice(5) - 1] + '</div><div class="v">' + mln(m.fact, 2) + '</div><div class="s">' + pct(m.share) + ' региона' + (m.ly != null ? ' · год назад ' + mln(m.ly, 2) : '') + '</div></div>' +
         '<div class="tile"><div class="k">Ожидается до конца месяца</div><div class="v">' + mln(m.forecast ? m.forecast.exp : 0, 2) + '</div><div class="s">' + (m.forecast && m.forecast.late ? '<span class="neg">не пришло ' + mln(m.forecast.late, 2) + '</span>' : 'по датам оплаты') + '</div></div>' +
@@ -858,12 +1065,12 @@
         : '<button class="btn" type="button" id="mts">📝 Задачи по засыпающим без задач</button><button class="btn" type="button" id="mtd">📝 Задачи: дожать долги 31–90 дн.</button>') +
         '</div><div class="note" id="mmsg">' + (STATIC ? 'Через бота: он подготовит правку и пришлёт «Подтвердить».' : 'Каждая правка — с предпросмотром и только после «Подтвердить». Передать клиента — кнопка «→» в списках ниже.') + '</div></div>';
       var max = 0; m.trend.forEach(function (x) { if (x.fact > max) max = x.fact; });
-      html += '<div class="grid"><div class="card"><h3>Приход денег по месяцам</h3><div class="tw"><table class="t"><tbody>' + m.trend.slice().reverse().map(function (x) {
-        return '<tr><td>' + cap(ymName(x.ym)) + '</td><td class="l" style="width:50%"><div class="bar" style="margin:0;height:8px"><i style="width:' + (max ? x.fact / max * 100 : 0).toFixed(1) + '%"></i></div></td><td>' + mln(x.fact, 2) + '</td></tr>'; }).join('') + '</tbody></table></div></div>' +
-        '<div class="card"><h3>Что отгружает: 12 месяцев</h3>' + groupBars(m.products.y12, m.products.cls, m.products.own) + '<h3 style="margin-top:14px">Этот месяц</h3>' + groupBars(m.products.cur, m.products.cls, m.products.own) + '</div></div>';
-      html += '<div class="card"><h3>Лучшие клиенты по своему производству (12 мес.)</h3><div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th>Своё, млн</th><th>Всего, млн</th><th>Последняя отгрузка</th>' + (STATIC ? '' : '<th class="l">Передать</th>') + '</tr></thead><tbody>' +
+      html += details('Приход денег по месяцам', '<div class="tw"><table class="t"><tbody>' + m.trend.slice().reverse().map(function (x) {
+        return '<tr><td>' + cap(ymName(x.ym)) + '</td><td class="l" style="width:50%"><div class="bar" style="margin:0;height:8px"><i style="width:' + (max ? x.fact / max * 100 : 0).toFixed(1) + '%"></i></div></td><td>' + mln(x.fact, 2) + '</td></tr>'; }).join('') + '</tbody></table></div>', false);
+      html += details('Что отгружает: своё производство и сопутка', '<h3>12 месяцев</h3>' + groupBars(m.products.y12, m.products.cls, m.products.own) + '<h3 style="margin-top:14px">Этот месяц</h3>' + groupBars(m.products.cur, m.products.cls, m.products.own), false);
+      html += details('Лучшие клиенты по своему производству (12 мес.)', '<div class="tw"><table class="t"><thead><tr><th class="l">Клиент</th><th>Своё, млн</th><th>Всего, млн</th><th>Последняя отгрузка</th>' + (STATIC ? '' : '<th class="l">Передать</th>') + '</tr></thead><tbody>' +
         m.topClients.map(function (c) { return '<tr><td class="l">' + esc(c.client) + '</td><td><b>' + mln(c.own12, 2) + '</b></td><td>' + mln(c.all12, 2) + '</td><td>' + dayLabel(c.last) + '</td>' +
-          (STATIC ? '' : '<td class="l"><div class="row" style="flex-wrap:nowrap">' + mgrSelect('trs', m.name) + '<button class="btn" type="button" data-tr="' + esc(c.agent) + '" style="min-height:34px;padding:4px 10px">→</button></div></td>') + '</tr>'; }).join('') + '</tbody></table></div></div>';
+          (STATIC ? '' : '<td class="l"><div class="row" style="flex-wrap:nowrap">' + mgrSelect('trs', m.name) + '<button class="btn" type="button" data-tr="' + esc(c.agent) + '" style="min-height:34px;padding:4px 10px">→</button></div></td>') + '</tr>'; }).join('') + '</tbody></table></div>', false);
       html += details('Ожидаемые оплаты до конца месяца · ' + m.expList.length, orderTable(m.expList), m.expList.length > 0 && m.expList.length < 15);
       if (m.lateList.length) html += details('<span class="neg">Обещали, но не пришло · ' + m.lateList.length + '</span>', orderTable(m.lateList, 'Не пришло'), true);
       if (m.nextList.length) html += details('Оплаты 1–15 следующего месяца · ' + m.nextList.length, orderTable(m.nextList), false);
@@ -956,19 +1163,28 @@
   // ---------- планы ----------
   function plansWidget(w) {
     api('/api/plans').then(function (j) {
-      var keys = Object.keys(j.months).sort(), variant = 'plan1';
+      var keys = Object.keys(j.months).sort(), variant = 'plan1', best = j.best || {};
+      var V = [['plan1', 'Рекорды регионов +5%'], ['plan2', 'Рекорды регионов +10%'], ['plan1d', 'Лучший месяц отдела +5%'], ['plan2d', 'Лучший месяц отдела +10%']];
+      var pOf = function (k) { var m = j.months[k]; if (variant === 'plan1d' || variant === 'plan2d') return best[k] ? best[k][variant] : null; return m[variant] || m.plan; };
       function draw() {
-        var html = '<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">План прихода денег, ю</h3><div class="seg" id="vs"><button type="button" data-v="plan1" class="' + (variant === 'plan1' ? 'on' : '') + '">План 1 · рекорд +5%</button><button type="button" data-v="plan2" class="' + (variant === 'plan2' ? 'on' : '') + '">План 2 · рекорд +10%</button></div></div>' +
-          '<div class="tw" style="margin-top:10px"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Отдел</th><th>Факт</th><th>%</th></tr></thead><tbody>';
-        var year = '', sum = null;
+        var dv = variant.slice(-1) === 'd';
+        var html = '<div class="card"><h3>План прихода денег, ю</h3><div class="seg" id="vs">' + V.map(function (v) { return '<button type="button" data-v="' + v[0] + '" class="' + (variant === v[0] ? 'on' : '') + '">' + v[1] + '</button>'; }).join('') + '</div>' +
+          '<div class="tw" style="margin-top:10px"><table class="t"><thead><tr><th>Месяц</th><th>Центр</th><th>Юг</th><th>Север</th><th>Отдел</th>' + (dv ? '<th>Рекорд отдела</th>' : '<th>Другой способ</th>') + '<th>Факт</th><th>%</th></tr></thead><tbody>';
+        var year = '';
         keys.forEach(function (k) {
-          var m = j.months[k], p = m[variant] || m.plan, fa = j.fact[k];
-          if (k.slice(0, 4) !== year) { year = k.slice(0, 4); html += '<tr class="grp"><td colspan="7">' + year + '</td></tr>'; }
-          html += '<tr><td>' + cap(MONTHS[+k.slice(5) - 1]) + (m.plan ? ' <span class="small muted">утв.</span>' : '') + '</td><td>' + num(p['Ц']) + '</td><td>' + num(p['Ю']) + '</td><td>' + num(p['С']) + '</td><td><b>' + num(p['Отдел']) + '</b></td><td>' + (fa ? num(fa['Отдел']) : '—') + '</td><td>' + (fa ? pct(fa['Отдел'] / p['Отдел']) : '') + '</td></tr>';
+          var m = j.months[k], p = pOf(k), fa = j.fact[k], bk = best[k];
+          if (!p) return;
+          if (k.slice(0, 4) !== year) { year = k.slice(0, 4); html += '<tr class="grp"><td colspan="8">' + year + '</td></tr>'; }
+          var other = dv ? (m[variant.slice(0, 5)] || m.plan || {})['Отдел'] : (bk ? bk[variant === 'plan2' ? 'plan2d' : 'plan1d']['Отдел'] : null);
+          html += '<tr><td>' + cap(MONTHS[+k.slice(5) - 1]) + (m.plan && !dv ? ' <span class="small muted">утв.</span>' : '') + '</td><td>' + num(p['Ц']) + '</td><td>' + num(p['Ю']) + '</td><td>' + num(p['С']) + '</td><td><b>' + num(p['Отдел']) + '</b></td>' +
+            (dv ? '<td class="small">' + num(bk.dept) + ' <span class="muted">' + bk.src.slice(0, 4) + '</span></td>' : '<td class="small muted">' + (other != null ? num(other) : '—') + '</td>') +
+            '<td>' + (fa ? num(fa['Отдел']) : '—') + '</td><td>' + (fa ? pct(fa['Отдел'] / p['Отдел']) : '') + '</td></tr>';
         });
-        var y27 = keys.filter(function (k) { return k.slice(0, 4) === '2027'; });
-        if (y27.length) { var t = { 'Ц': 0, 'Ю': 0, 'С': 0, 'Отдел': 0 }; y27.forEach(function (k) { var p = j.months[k][variant]; for (var z in t) t[z] += p[z]; }); html += '<tr class="tot"><td>Итого 2027</td><td>' + num(t['Ц']) + '</td><td>' + num(t['Ю']) + '</td><td>' + num(t['С']) + '</td><td>' + num(t['Отдел']) + '</td><td></td><td></td></tr>'; }
-        html += '</tbody></table></div><div class="note">Методика: план региона = рекорд этого же месяца за прошлые годы + надбавка, округление до 0,5 ю; отдел = большее из суммы регионов и рекорда отдела + надбавка. Ноябрь 2026 — утверждённый план (рекорд +10%). Источник — «План продаж Десант 2027.xlsx».</div></div>';
+        var y27 = keys.filter(function (k) { return k.slice(0, 4) === '2027' && pOf(k); });
+        if (y27.length) { var t = { 'Ц': 0, 'Ю': 0, 'С': 0, 'Отдел': 0 }; y27.forEach(function (k) { var p = pOf(k); for (var z in t) t[z] += p[z]; }); html += '<tr class="tot"><td>Итого 2027</td><td>' + num(t['Ц']) + '</td><td>' + num(t['Ю']) + '</td><td>' + num(t['С']) + '</td><td>' + num(t['Отдел']) + '</td><td></td><td></td><td></td></tr>'; }
+        html += '</tbody></table></div><div class="note">' + (dv
+          ? '<b>Лучший месяц отдела:</b> отдел = лучший такой же месяц отдела за прошлые годы + надбавка; регионы — в тех долях, какие у них были в том рекордном месяце. «Рекорд отдела» — сам рекорд и его год. Это вариант для сравнения; в «Выполнении» и «Манёвре» пока считаются планы по рекордам регионов.'
+          : '<b>Рекорды регионов:</b> план региона = рекорд этого же месяца за прошлые годы + надбавка; отдел = большее из суммы регионов и рекорда отдела + надбавка. «Другой способ» — отдел по лучшему месяцу отдела с той же надбавкой. Ноябрь 2026 — утверждённый план.') + ' Округление до 0,5 ю.</div></div>';
         w.innerHTML = html;
         w.querySelector('#vs').addEventListener('click', function (e) { var v = e.target.getAttribute('data-v'); if (v) { variant = v; draw(); } });
       }
@@ -984,7 +1200,7 @@
       if (g.latest) {
         var prev = {}; if (g.prev) g.prev.rows.forEach(function (r) { prev[r.mgrId] = r; });
         var zs = ['Центр', 'Юг', 'Север'];
-        html += '<div class="card"><h3>База по менеджерам на ' + esc(g.latest.date.split('-').reverse().join('.')) + '</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Клиентов</th><th>Активных</th><th>% акт.</th><th>Спящих</th><th>Пассив</th><th>VIP</th><th>Отгрузки в год, млн</th>' + (g.prev ? '<th>Акт. к ' + esc(g.prev.date.slice(8, 10) + '.' + g.prev.date.slice(5, 7)) + '</th>' : '') + '</tr></thead><tbody>';
+        html += '<div class="card fold"><h3>База по менеджерам на ' + esc(g.latest.date.split('-').reverse().join('.')) + '</h3><div class="tw"><table class="t"><thead><tr><th>Менеджер</th><th>Клиентов</th><th>Активных</th><th>% акт.</th><th>Спящих</th><th>Пассив</th><th>VIP</th><th>Отгрузки в год, млн</th>' + (g.prev ? '<th>Акт. к ' + esc(g.prev.date.slice(8, 10) + '.' + g.prev.date.slice(5, 7)) + '</th>' : '') + '</tr></thead><tbody>';
         var T = { n: 0, a: 0, sl: 0, p: 0, vip: 0, yr: 0 };
         zs.forEach(function (z) {
           var rs = g.latest.rows.filter(function (r) { return r.zone === z; }); if (!rs.length) return;

@@ -169,3 +169,23 @@ select, input[type=text], input[type=password], input[type=search] { font: inher
   table.t { font-size: 13px; }
   table.t th, table.t td { padding: 6px 6px; }
 }
+
+/* сворачиваемые карточки: видно только заголовок, клик раскрывает подробности */
+.card.fold > h3 { cursor: pointer; user-select: none; -webkit-user-select: none; margin: 0; }
+.card.fold > h3::before { content: "▸ "; color: var(--muted); }
+.card.fold.open > h3::before { content: "▾ "; }
+.card.fold.open > h3 { margin-bottom: 10px; }
+.card.fold:not(.open) > :not(h3) { display: none; }
+details.card > summary { list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::before { content: "▸ "; color: var(--muted); }
+details.card[open] > summary::before { content: "▾ "; }
+
+/* Редакция: таблица-редактор */
+.redt { border-collapse: collapse; font-size: 13px; }
+.redt th, .redt td { border: 1px solid var(--line); padding: 3px 6px; white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.redt thead th { background: var(--surface-2); color: var(--text-2); position: sticky; top: 0; z-index: 1; }
+.redt th.rn { background: var(--surface-2); color: var(--muted); font-weight: 500; text-align: left; position: sticky; left: 0; }
+.redt th.rn a { margin-left: 4px; color: var(--muted); text-decoration: none; }
+.redt th.rn a:hover { color: var(--accent); }
+.redt td[contenteditable="true"]:focus { outline: 2px solid var(--accent); background: var(--surface); white-space: normal; }
