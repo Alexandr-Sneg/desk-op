@@ -135,7 +135,7 @@
   }
 
   // ---------- меню ----------
-  var ROUTES = [['home', 'Главная'], ['maneuver', 'Манёвр'], ['fact', 'Выполнение'], ['money', 'Деньги'], ['debts', 'Дебиторка'], ['managers', 'Менеджеры'], ['clients', 'Клиентская база'], ['sleeping', 'Засыпающие'],
+  var ROUTES = [['home', 'Главная'], ['maneuver', 'Планирование'], ['fact', 'Выполнение'], ['money', 'Деньги'], ['debts', 'Дебиторка'], ['managers', 'Менеджеры'], ['clients', 'Клиентская база'], ['sleeping', 'Засыпающие'],
     ['plans', 'Планы'], ['prices', 'Прайсы и конкуренты'], ['redaction', 'Редакция'], ['training', 'Обучение']];
   function drawNav(cur) {
     navEl.innerHTML = ROUTES.map(function (r) {
@@ -936,7 +936,7 @@
     }).catch(function () { box.innerHTML = ''; });
   }
 
-  // ---------- «Манёвр»: прогноз месяца ----------
+  // ---------- «Планирование»: прогноз месяца ----------
   function forecastWidget(w) {
     w.innerHTML = '<div class="loading">Считаю прогноз…</div>';
     api('/api/forecast').then(function (f) {
